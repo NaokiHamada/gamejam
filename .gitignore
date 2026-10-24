@@ -1,0 +1,9 @@
+apikey.local
+.env
+.env.*
+__pycache__/
+*.pyc
+.DS_Store
+artifacts/
+*.local
+NETWORK_DIAGNOSTICS.md
