@@ -2,6 +2,7 @@ import {DEFAULT_RULES, TILES, WIN_NAMES, validateRules, GameError, require} from
 
 import {compile, LANGUAGE, LIMITS} from './rule-program.js';
 
+export const DEFAULT_MODEL = 'gpt-6-luna';
 export const VIOLATIONS = Object.freeze({malicious: '悪意ある処理', load: '過大なサーバー負荷', tokens: 'トークン浪費', boring: 'ゲームをつまらなくする提案'});
 export function penalty(violation, severity) {
   const base = {malicious: 6000, load: 3000, tokens: 1500, boring: 1500}[violation];
@@ -89,6 +90,9 @@ export async function judge(text, rules, env, programs = []) {
   try { key = env.OPENAI_API_KEY || await env.OPENAI_KEY_STORE?.get(); }
   catch { throw new GameError('AIキーを取得できませんでした。Secrets Storeの設定を確認してください。'); }
   require(typeof key === 'string' && key.length > 0, 'AIキーが未設定です。部屋主にお知らせください。');
+  const model = env.OPENAI_MODEL || DEFAULT_MODEL;
+  // Luna's output budget includes reasoning tokens as well as the JSON verdict.
+  const luna = model === DEFAULT_MODEL || model.startsWith(DEFAULT_MODEL + '-');
   let response;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 25000);
@@ -96,8 +100,8 @@ export async function judge(text, rules, env, programs = []) {
     try {
       response = await fetch('https://api.openai.com/v1/responses', {
         method: 'POST', headers: {'Content-Type': 'application/json', Authorization: `Bearer ${key}`},
-        body: JSON.stringify({model: env.OPENAI_MODEL || 'gpt-4.1-mini', store: false, instructions: INSTRUCTIONS,
-          input, max_output_tokens: 2400,
+        body: JSON.stringify({model, store: false, instructions: INSTRUCTIONS,
+          input, max_output_tokens: luna ? 8192 : 2400, ...(luna ? {reasoning: {effort: 'medium'}} : {}),
           text: {format: {type: 'json_schema', name: 'mahjong_rule', strict: true, schema: SCHEMA}}}),
         signal: controller.signal,
       });

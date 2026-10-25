@@ -212,7 +212,7 @@ function connectSocket() {
 async function boot() {
   try {
     const health=await request('/api/health');
-    $('ai-status').textContent=health.ai?'● AI審判の準備ができています':'AIキーが未設定です。対局はできますがルール変更は利用できません。';
+    $('ai-status').textContent=health.ai?'● AI審判：'+health.model:'AIキーが未設定です。対局はできますがルール変更は利用できません。';
     $('chat-limit').textContent='Enterで送信 / Shift + Enterで改行・1卓80回／全体1日'+health.daily_ai_limit+'回まで';
     if(session) {
       try { const result=await request('/api/state/'+encodeURIComponent(session.code));render(result.state);connectSocket(); }
