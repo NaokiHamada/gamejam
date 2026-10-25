@@ -76,7 +76,8 @@ export class Room {
     this.allPrograms('before_round_start');
     for (let i = 0; i < this.players.length; i++) {
       this.applyPrograms('before_deal', i);
-      this.players[i].hand = sortedHand(Array.from({length: 13}, () => this.wall.pop()));
+      // Earlier deal hooks may already have given this seat extra tiles.
+      this.players[i].hand = sortedHand([...this.players[i].hand, ...Array.from({length: 13}, () => this.wall.pop())]);
       this.applyPrograms('after_deal', i);
     }
     this.allPrograms('after_round_start');
@@ -202,6 +203,10 @@ export class Room {
   }
   tick() {
     if (this.status !== 'playing' || this.pending) return false;
+    if (!this.claim && !this.players[this.turn].hand.length) {
+      this.event('system', `${this.players[this.turn].name} は手牌がないため打牌をスキップ。`);
+      this.advance(); return true;
+    }
     if (this.claim && now() >= this.claim.deadline) { this.resolveClaim(true); this.version++; return true; }
     if (now() >= this.npcDeadline()) {
       if (this.claim) {
@@ -274,7 +279,10 @@ export class Room {
   }
   programContext(i, extra = {}) {
     const p = this.players[i];
-    return {actor: i, turn: this.turn, round: this.round, wall: this.wall.length, direction: this.direction, turn_seconds: this.turn_seconds, text: '', tile: '',
+    return {actor: i, dealer: (this.round - 1 + 4) % 4, scores: this.players.map(q => q.score),
+      hands: this.players.map(q => [...q.hand]), all_melds: this.players.map(q => structuredClone(q.melds || [])),
+      rivers: this.players.map(q => [...q.river]), wall_tiles: [...this.wall].reverse(),
+      turn: this.turn, round: this.round, wall: this.wall.length, direction: this.direction, turn_seconds: this.turn_seconds, text: '', tile: '',
       meld_count: (p.melds || []).length, melds: (p.melds || []).flatMap(m => m.tiles),
       call_type: '', source: -1, points: 0, loser: -1, method: '',
       score: p.score, min_score: Math.min(...this.players.map(q => q.score)), max_score: Math.max(...this.players.map(q => q.score)),
@@ -283,10 +291,14 @@ export class Room {
   }
   programEffects(event, i, extra = {}, readOnly = false) {
     const context = this.programContext(i, extra), effects = [];
+    // Later seats must still receive their normal 13-tile deal.
+    context.wall_reserve = event === 'after_deal' ? (this.players.length - i - 1) * 13 : 0;
+    let tileState = {hands: context.hands, rivers: context.rivers, melds: context.all_melds, wall: context.wall_tiles};
     for (const program of this.programs) {
       if (program.disabled) continue;
       try {
-        const effect = execute(compile(program.code), event, context, program.memory[i]);
+        const effect = execute(compile(program.code), event, context, program.memory[i], tileState);
+        if (effect.tiles) tileState = effect.tiles;
         effects.push(effect);
         if (!readOnly) program.memory[i] = effect.memory;
       } catch {
@@ -312,7 +324,17 @@ export class Room {
   applyPrograms(event, i, extra = {}) {
     if (this.status !== 'playing') return;
     const effects = this.programEffects(event, i, extra);
+    let cancelledClaim = false;
     for (const effect of effects) {
+      if (effect.tiles) {
+        this.players.forEach((p, seat) => {
+          p.hand = effect.tiles.hands[seat]; p.river = effect.tiles.rivers[seat]; p.melds = effect.tiles.melds[seat];
+        });
+        this.wall = [...effect.tiles.wall].reverse();
+        this.event('system', '生成ルール発動：牌プールを変更。');
+        if (effect.drew) this.drawn = true;
+        if (this.claim) { this.claim = null; cancelledClaim = true; }
+      }
       if (effect.award) {
         this.players.forEach((p, j) => { p.score += effect.award * (i === j ? 3 : -1); });
         this.event('system', `生成ルール発動：${this.players[i].name} ${effect.award > 0 ? 'が各員から' : 'が各員へ'}${Math.abs(effect.award)}点${effect.award > 0 ? '獲得' : '支払い'}。`);
@@ -327,6 +349,7 @@ export class Room {
       }
     }
     if (effects.some(e => e.win)) this.finish(i, null, this.players[i].hand, '生成ルールあがり');
+    else if (cancelledClaim) this.advance();
   }
   chonbo(i, violation, points, explanation) {
     this.players.forEach((p, j) => { p.score += j === i ? -points : points / 3; });
@@ -363,7 +386,7 @@ export class Room {
         online: Boolean(q.npc) || (connected ? connected.has(q.token) : now() - q.seen < 15), count: q.hand.length, river: q.river, melds: q.melds || []})),
       hand: p.hand, messages: this.messages, history: this.history.slice(-30), pending: this.pending,
       ai_calls: this.ai_calls, result: this.result, claim: this.claim ? {tile: this.claim.tile, from: this.claim.from, deadline: this.claim.deadline} : null,
-      deadline: this.claim?.deadline ?? this.deadline, server_time: now(), can_discard: active && !this.claim && i === this.turn,
+      deadline: this.claim?.deadline ?? this.deadline, server_time: now(), can_discard: active && !this.claim && i === this.turn && p.hand.length > 0,
       call_options: active ? this.callOptions(i) : [], call_pending: Boolean(this.claim?.requests?.some(r => r.seat === i)),
       can_tsumo: active && this.drawn && !this.claim && i === this.turn && this.isWinning(i, p.hand, '', true), can_ron: active && this.canRon(i, true)});
   }

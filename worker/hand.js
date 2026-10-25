@@ -2,6 +2,7 @@ export const TILES = [...'mps'].flatMap(s => Array.from({length: 9}, (_, i) => `
   .concat(Array.from({length: 7}, (_, i) => `${i + 1}z`));
 
 export function winning(hand, shape = 'default', joker = 'none', melds = []) {
+  if (melds.some(m => !validMeld(m.tiles))) return false;
   if (hand.length !== 14 - melds.length * 3 || hand.some(t => !TILES.includes(t))) return false;
   const counts = TILES.map(t => hand.filter(x => x === t).length);
   const jokerIndex = TILES.indexOf(joker);
@@ -43,3 +44,12 @@ export function winning(hand, shape = 'default', joker = 'none', melds = []) {
   return wild >= 2 && meldable(counts, wild - 2);
 }
 
+// Generated rules may remove or add exposed tiles. Only complete shapes are fixed melds.
+export function validMeld(tiles) {
+  if (!Array.isArray(tiles) || tiles.some(t => !TILES.includes(t))) return false;
+  if ((tiles.length === 3 || tiles.length === 4) && tiles.every(t => t === tiles[0])) return true;
+  if (tiles.length !== 3 || tiles[0][1] === 'z') return false;
+  const sorted = [...tiles].sort();
+  return sorted.every(t => t[1] === sorted[0][1]) &&
+    Number(sorted[1][0]) === Number(sorted[0][0]) + 1 && Number(sorted[2][0]) === Number(sorted[0][0]) + 2;
+}
