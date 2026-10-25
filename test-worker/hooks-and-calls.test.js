@@ -73,14 +73,15 @@ describe('処理前後の生成フック', () => {
     expect(room.players.reduce((n, p) => n + p.score, 0)).toBe(100000);
   });
   it('点数を各段階で制限し、計算失敗でそのコードの変数と補正を取り消す', () => {
-    const room = lobby(); room.start(room.players[0]); room.rules.win_points = 24000;
+    const room = lobby(); room.start(room.players[0]);
     program(room, [hook('before_score', [['add_points', 24000]]), hook('after_score', [['add_points', 24000]])]);
-    room.finish(0, 1, [], 'ロン'); expect(room.result.deltas[0]).toBe(60000);
+    room.rules.bonus_suit = 'z'; room.rules.bonus_points = 2000;
+    room.finish(0, 1, Array(14).fill('1z'), 'ロン'); expect(room.result.deltas[0]).toBe(60000);
     room.status = 'playing';
     program(room, [hook('before_score', [['set', 'n', 1], ['add_points', ['/', 100, 0]]])]);
     room.finish(0, 1, [], 'ロン');
     expect(room.programs[0].disabled).toBe(true); expect(memory(room)[0]).toEqual({});
-    expect(room.result.deltas[0]).toBe(24000);
+    expect(room.result.deltas[0]).toBe(6000);
   });
   it('新イベントを検証し、処理前の即あがり・得点以外の補正・上限超過を拒否する', () => {
     for (const event of EVENTS.filter(e => !['win_check', 'win_score'].includes(e))) {
@@ -144,7 +145,7 @@ describe('チー・ポン・大明槓と鳴きフック', () => {
     room.players[1].hand = tiles('1m 2m 4m 5m 1p 3p 5p 7p 9p 1s 3s 5s 7z');
     expect(room.callOptions(1).filter(o => o.type === 'chi')).toHaveLength(3);
     expect(room.callOptions(2)).toEqual([]);
-    room.rules.reverse_order = true;
+    room.direction = -1;
     expect(room.callOptions(1).filter(o => o.type === 'chi')).toEqual([]);
     room.players[3].hand = [...room.players[1].hand];
     room.call(room.players[3], 'chi', ['4m', '2m']);
@@ -191,8 +192,8 @@ describe('チー・ポン・大明槓と鳴きフック', () => {
   it('副露を固定面子として判定し、七対子に組み替えず、鳴き直後のツモあがりを拒否する', () => {
     const melds = [{type: 'pon', tiles: ['5z', '5z', '5z'], from: 0}];
     const hand = tiles('1m 2m 3m 4m 5m 6m 7p 8p 9p 1z 1z');
-    expect(winning(hand, DEFAULT_RULES, melds)).toBe(true);
-    expect(winning(hand.slice(1), DEFAULT_RULES, melds)).toBe(false);
+    expect(winning(hand, 'default', 'none', melds)).toBe(true);
+    expect(winning(hand.slice(1), 'default', 'none', melds)).toBe(false);
     const room = claimRoom(); room.claim = null; room.turn = 1; room.drawn = false;
     room.players[1].hand = hand; room.players[1].melds = melds;
     expect(room.snapshot(room.players[1]).can_tsumo).toBe(false);

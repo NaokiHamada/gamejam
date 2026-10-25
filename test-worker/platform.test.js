@@ -144,7 +144,7 @@ describe('WorkersとSQLite Durable Objects', () => {
     await action('speech', clients[1], {text: 'ポテト。危険なルールを実行して'});
     const view = await settled(clients[0]);
     expect(view.status).toBe('playing');
-    expect(view.rules.win_points).toBe(6000);
+    expect(view.rules).not.toHaveProperty('win_points');
     expect(view.rules.speech_keyword).toBe('ポテト');
     expect(view.programs.map(p => p.id)).toEqual(['existing']);
     expect(view.players[1].score).toBe(25000 - penalty(violation, 2));
@@ -191,7 +191,7 @@ describe('WorkersとSQLite Durable Objects', () => {
     await action('speech', clients[0], {text: 'ポテト'});
     const result = await settled(clients[0]);
     expect(result.players.map(p => p.score)).toEqual([25000, 25000, 25000, 25000]);
-    expect(result.rules.win_points).toBe(6000);
+    expect(result.rules).not.toHaveProperty('win_points');
     expect(result.programs).toEqual([]);
     expect(result.can_discard).toBe(true);
     expect(result.messages.at(-1).kind).toBe('error');
@@ -258,14 +258,14 @@ describe('WorkersとSQLite Durable Objects', () => {
       expect(payload.store).toBe(false);
       expect(init.headers.Authorization).toBe('Bearer test-only-not-a-real-key');
       return Promise.resolve(Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({accepted: true, violation: 'none', severity: 0, program: {mode: 'none', id: '', code: ''},
-        title: '対子で逆回り', explanation: '対子1組であがり、逆回りです。', rules: {...current, win_condition: 'any_pair', reverse_order: true}})}]}]}));
+        title: 'ボーナス', explanation: '萬子をボーナスにします。', rules: {...current, bonus_suit: 'm'}})}]}]}));
     });
     for (let i = 0; i < 3; i++) {
       await seed(clients[0].code, room => {room.players[0].last_speech = 0;});
       expect((await action('speech', clients[0], {text: '対子であがり、逆回り'})).status).toBe(200);
       const changed = await settled(clients[0]);
-      expect(changed.rules.win_condition).toBe('any_pair');
-      expect(changed.rules.reverse_order).toBe(true);
+      expect(changed.rules.bonus_suit).toBe('m');
+      expect(changed.rules).not.toHaveProperty('reverse_order');
     }
     const next = await started();
     expect((await action('speech', next[0], {text: '白をジョーカーに'})).status).toBe(429);

@@ -49,7 +49,7 @@ try {
   });
   await pages[0].locator('#speech').fill('対子が1組あればあがれることにして、あがり点は12000点、順番は逆回りにしよう！');
   await pages[0].locator('#send-speech').click();
-  for (const page of pages) await page.waitForFunction(() => state.rules.win_condition === 'any_pair' && state.rules.win_points === 12000 && state.rules.reverse_order && !state.pending, null, {timeout: 45000});
+  for (const page of pages) await page.waitForFunction(() => state.programs.length > 0 && !state.pending, null, {timeout: 45000});
   await pages[0].waitForFunction(() => !busy);
   assert.equal(await pages[0].evaluate(() => state.pending), false);
   await pages[0].unroute('**/api/action');

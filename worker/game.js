@@ -1,13 +1,10 @@
 import {compile, execute} from './rule-program.js';
 import {chooseDiscard} from './npc.js';
+import {TILES, winning} from './hand.js';
 // Pure game rules. No platform APIs beyond Web Crypto; all state is serializable.
-export const TILES = [...'mps'].flatMap(s => Array.from({length: 9}, (_, i) => `${i + 1}${s}`))
-  .concat(Array.from({length: 7}, (_, i) => `${i + 1}z`));
-export const DEFAULT_RULES = Object.freeze({win_condition: 'standard', seven_pairs: true,
-  joker: 'none', win_points: 6000, bonus_suit: 'none', bonus_points: 500,
-  reverse_order: false, turn_seconds: 45, speech_keyword: '', speech_effect: 'bonus', speech_points: 300});
-export const WIN_NAMES = {standard: '4面子＋1雀頭', any_pair: '対子が1組あればOK',
-  two_pairs: '対子が2組あればOK', any_triplet: '刻子が1組あればOK', all_simples: '手牌がすべて2〜8の数牌'};
+export {TILES, winning} from './hand.js';
+export const DEFAULT_RULES = Object.freeze({bonus_suit: 'none', bonus_points: 500,
+  speech_keyword: '', speech_effect: 'bonus', speech_points: 300});
 export const now = () => Date.now() / 1000;
 export class GameError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; }
@@ -22,76 +19,30 @@ export function randomInt(max) {
 export function token() { return [...crypto.getRandomValues(new Uint8Array(32))].map(n => n.toString(16).padStart(2, '0')).join(''); }
 export const sortedHand = hand => [...hand].sort((a, b) => TILES.indexOf(a) - TILES.indexOf(b));
 
-export function winning(hand, rules, melds = []) {
-  if (hand.length !== 14 - melds.length * 3 || hand.some(t => !TILES.includes(t))) return false;
-  const tiles = rules.win_condition === 'standard' ? hand : [...hand, ...melds.flatMap(m => m.tiles)];
-  const counts = TILES.map(t => tiles.filter(x => x === t).length);
-  const jokerIndex = TILES.indexOf(rules.joker);
-  const wild = jokerIndex < 0 ? 0 : counts[jokerIndex];
-  if (jokerIndex >= 0) counts[jokerIndex] = 0;
-  const pairs = counts.reduce((sum, n) => sum + Math.floor(n / 2), 0);
-  const singles = counts.reduce((sum, n) => sum + n % 2, 0);
-  if (rules.win_condition === 'any_pair') return pairs > 0 || wild >= 2 || (wild > 0 && counts.some(Boolean));
-  if (rules.win_condition === 'two_pairs') { const used = Math.min(wild, singles); return pairs + used + Math.floor((wild - used) / 2) >= 2; }
-  if (rules.win_condition === 'any_triplet') return Math.max(...counts) + wild >= 3;
-  if (rules.win_condition === 'all_simples') return counts.every((n, i) => !n || (i < 27 && i % 9 > 0 && i % 9 < 8));
-  if (!melds.length && rules.seven_pairs && Math.max(...counts) <= 2 && singles <= wild &&
-      counts.filter(Boolean).length + Math.floor((wild - singles) / 2) === 7) return true;
-  const memo = new Map();
-  const meldable = (c, w) => {
-    const i = c.findIndex(Boolean);
-    if (i < 0) return w % 3 === 0;
-    const key = c.join(',') + ':' + w;
-    if (memo.has(key)) return memo.get(key);
-    const take = Math.min(3, c[i]);
-    if (w >= 3 - take) {
-      const rest = [...c]; rest[i] -= take;
-      if (meldable(rest, w - (3 - take))) { memo.set(key, true); return true; }
-    }
-    if (i < 27) {
-      const base = Math.floor(i / 9) * 9;
-      for (let start = Math.max(base, i - 2); start <= Math.min(i, base + 6); start++) {
-        const rest = [...c]; let missing = 0;
-        for (let j = start; j < start + 3; j++) { if (rest[j]) rest[j]--; else missing++; }
-        if (missing <= w && meldable(rest, w - missing)) { memo.set(key, true); return true; }
-      }
-    }
-    memo.set(key, false); return false;
-  };
-  for (let i = 0; i < counts.length; i++) {
-    if (!counts[i]) continue;
-    const take = Math.min(2, counts[i]);
-    if (wild >= 2 - take) {
-      const rest = [...counts]; rest[i] -= take;
-      if (meldable(rest, wild - (2 - take))) return true;
-    }
-  }
-  return wild >= 2 && meldable(counts, wild - 2);
-}
-
 export function validateRules(rules) {
   require(rules && typeof rules === 'object' && !Array.isArray(rules) &&
     Object.keys(rules).length === Object.keys(DEFAULT_RULES).length &&
     Object.keys(DEFAULT_RULES).every(key => Object.hasOwn(rules, key)), 'ルールの形式が不正です。');
-  for (const [key, values] of Object.entries({win_condition: Object.keys(WIN_NAMES), joker: ['none', ...TILES],
-    bonus_suit: ['none', 'm', 'p', 's', 'z'], speech_effect: ['bonus', 'win']})) {
+  for (const [key, values] of Object.entries({bonus_suit: ['none', 'm', 'p', 's', 'z'], speech_effect: ['bonus', 'win']})) {
     require(values.includes(rules[key]), '未対応のルールです。');
   }
-  for (const [key, lo, hi] of [['win_points', 1000, 24000], ['bonus_points', 100, 2000],
-    ['turn_seconds', 15, 120], ['speech_points', 100, 3000]]) {
+  for (const [key, lo, hi] of [['bonus_points', 100, 2000], ['speech_points', 100, 3000]]) {
     require(Number.isInteger(rules[key]) && rules[key] >= lo && rules[key] <= hi, 'ルールの数値が範囲外です。');
   }
-  for (const key of ['seven_pairs', 'reverse_order']) require(typeof rules[key] === 'boolean', 'ルールの値が不正です。');
   require(typeof rules.speech_keyword === 'string' && [...rules.speech_keyword].length <= 20, '合言葉は20文字以内です。');
 }
 
 export class Room {
   constructor(code) {
     Object.assign(this, {code, players: [], status: 'lobby', rules: {...DEFAULT_RULES}, history: [], messages: [], programs: [],
-      pending: false, ai_calls: 0, round: 0, version: 0, wall: [], turn: 0, claim: null, deadline: 0, drawn: false,
+      direction: 1, turn_seconds: 45, pending: false, ai_calls: 0, round: 0, version: 0, wall: [], turn: 0, claim: null, deadline: 0, drawn: false,
       result: null, created: now(), touched: now(), pending_job: null, npc_deadline: 0});
   }
-  static restore(data) { return Object.assign(new Room(data.code), {drawn: data.status === 'playing' && !data.claim}, data); }
+  static restore(data) {
+    const room = Object.assign(new Room(data.code), {drawn: data.status === 'playing' && !data.claim}, data);
+    room.rules = Object.fromEntries(Object.entries(DEFAULT_RULES).map(([key, value]) => [key, data.rules?.[key] ?? value]));
+    return room;
+  }
   event(kind, text, extra = {}) {
     this.version++;
     this.touched = now();
@@ -142,7 +93,7 @@ export class Room {
       this.event('result', this.result.text); return;
     }
     const tile = this.wall.pop();
-    this.players[this.turn].hand.push(tile); this.drawn = true; this.deadline = now() + this.rules.turn_seconds;
+    this.players[this.turn].hand.push(tile); this.drawn = true; this.deadline = now() + this.turn_seconds;
     this.npc_deadline = now() + 1.2;
     this.applyPrograms('after_draw', this.turn, {tile});
   }
@@ -163,12 +114,12 @@ export class Room {
     this.applyPrograms('after_discard', this.turn, {tile});
     this.resolveClaim();
   }
-  nextSeat(from) { return (from + (this.rules.reverse_order ? 3 : 1)) % 4; }
+  nextSeat(from) { return (from + (this.direction === -1 ? 3 : 1)) % 4; }
   changeTurn(seat) {
     this.applyPrograms('before_turn', seat);
     this.turn = seat;
     this.applyPrograms('after_turn', seat);
-    this.deadline = now() + this.rules.turn_seconds;
+    this.deadline = now() + this.turn_seconds;
     this.npc_deadline = now() + 1.2;
   }
   advance() {
@@ -206,7 +157,7 @@ export class Room {
     if (this.status !== 'playing' || !this.claim) return;
     if (!expired && this.players.some((_, i) => this.canRon(i) || this.callOptions(i).length)) return;
     const claim = this.claim;
-    const distance = seat => this.rules.reverse_order ? (claim.from - seat + 4) % 4 : (seat - claim.from + 4) % 4;
+    const distance = seat => this.direction === -1 ? (claim.from - seat + 4) % 4 : (seat - claim.from + 4) % 4;
     const request = [...(claim.requests || [])].sort((a, b) =>
       Number(a.type === 'chi') - Number(b.type === 'chi') || distance(a.seat) - distance(b.seat))[0];
     if (!request) { this.advance(); return; }
@@ -236,7 +187,7 @@ export class Room {
     hand = [...hand, ...(this.players[winner].melds || []).flatMap(m => m.tiles)];
     const extra = {hand, loser: loser ?? -1, method: label};
     const correction = (event, points) => this.programEffects(event, winner, {...extra, points}).reduce((sum, e) => sum + e.bonus, 0);
-    const base = this.rules.win_points + correction('before_score', this.rules.win_points);
+    const base = 6000 + correction('before_score', 6000);
     const bonus = hand.filter(t => t[1] === this.rules.bonus_suit).length * this.rules.bonus_points;
     const clamp = n => Math.max(1000, Math.min(60000, n));
     let points = clamp(base + bonus + correction('win_score', base + bonus));
@@ -307,7 +258,7 @@ export class Room {
       }
       case 'reset_rules':
         require(p === this.players[0] && this.status !== 'playing' && !this.pending, '部屋主が局の合間にリセットできます。');
-        this.rules = {...DEFAULT_RULES}; this.programs = [];
+        this.rules = {...DEFAULT_RULES}; this.programs = []; this.direction = 1; this.turn_seconds = 45;
         this.history.push({title: '初期ルールに戻しました', explanation: '次の局から初期ルールで対戦します。', changes: {}, by: p.name});
         this.history = this.history.slice(-30); this.event('rule', '初期ルールに戻しました。'); break;
       case 'leave':
@@ -323,12 +274,12 @@ export class Room {
   }
   programContext(i, extra = {}) {
     const p = this.players[i];
-    return {actor: i, turn: this.turn, round: this.round, wall: this.wall.length, text: '', tile: '',
+    return {actor: i, turn: this.turn, round: this.round, wall: this.wall.length, direction: this.direction, turn_seconds: this.turn_seconds, text: '', tile: '',
       meld_count: (p.melds || []).length, melds: (p.melds || []).flatMap(m => m.tiles),
       call_type: '', source: -1, points: 0, loser: -1, method: '',
       score: p.score, min_score: Math.min(...this.players.map(q => q.score)), max_score: Math.max(...this.players.map(q => q.score)),
       discard_count: this.players.reduce((n, q) => n + q.river.length, 0), hand_count: (extra.hand || p.hand).length,
-      hand: [...(extra.hand || p.hand)], river: [...p.river], discards: this.players.flatMap(q => q.river), ...extra};
+      hand: [...(extra.hand || p.hand)], hand_melds: structuredClone(p.melds || []), river: [...p.river], discards: this.players.flatMap(q => q.river), ...extra};
   }
   programEffects(event, i, extra = {}, readOnly = false) {
     const context = this.programContext(i, extra), effects = [];
@@ -349,8 +300,14 @@ export class Room {
     return effects;
   }
   isWinning(i, hand, tile = '', readOnly = false) {
-    return winning(hand, this.rules, this.players[i].melds || []) || (hand.length === 14 - (this.players[i].melds || []).length * 3 && hand.every(t => TILES.includes(t)) &&
-      this.programEffects('win_check', i, {hand, tile}, readOnly).some(e => e.win));
+    const melds = this.players[i].melds || [];
+    if (hand.length !== 14 - melds.length * 3 || hand.some(t => !TILES.includes(t))) return false;
+    let allowed = winning(hand, 'default', 'none', melds);
+    for (const effect of this.programEffects('win_check', i, {hand, tile}, readOnly)) {
+      if (effect.allowed !== null) allowed = effect.allowed;
+      if (effect.win) allowed = true;
+    }
+    return allowed;
   }
   applyPrograms(event, i, extra = {}) {
     if (this.status !== 'playing') return;
@@ -360,9 +317,9 @@ export class Room {
         this.players.forEach((p, j) => { p.score += effect.award * (i === j ? 3 : -1); });
         this.event('system', `生成ルール発動：${this.players[i].name} ${effect.award > 0 ? 'が各員から' : 'が各員へ'}${Math.abs(effect.award)}点${effect.award > 0 ? '獲得' : '支払い'}。`);
       }
-      if (effect.reverse) this.rules.reverse_order = !this.rules.reverse_order;
+      if (effect.reverse) this.direction *= -1;
       if (effect.seconds !== null) {
-        this.rules.turn_seconds = effect.seconds;
+        this.turn_seconds = effect.seconds;
         if (!this.claim) {
           if (this.pending && this.pending_job) this.pending_job.reset_deadline = true;
           else this.deadline = now() + effect.seconds;
@@ -400,7 +357,7 @@ export class Room {
   snapshot(p, connected) {
     const i = this.players.indexOf(p), active = this.status === 'playing' && !this.pending;
     return structuredClone({code: this.code, me: i, host: i === 0, status: this.status, version: this.version,
-      round: this.round, wall: this.wall.length, turn: this.turn, rules: this.rules,
+      round: this.round, wall: this.wall.length, turn: this.turn, direction: this.direction, turn_seconds: this.turn_seconds, rules: this.rules,
       programs: this.programs.map(({id, title, explanation, code, disabled}) => ({id, title, explanation, code, disabled})),
       players: this.players.map(q => ({name: q.name, score: q.score, ready: q.ready, npc: Boolean(q.npc),
         online: Boolean(q.npc) || (connected ? connected.has(q.token) : now() - q.seen < 15), count: q.hand.length, river: q.river, melds: q.melds || []})),
