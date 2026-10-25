@@ -5,8 +5,8 @@ const winds = ['東','南','西','北'];
 const suitNames = {m:'萬子',p:'筒子',s:'索子',z:'字牌',none:'なし'};
 const winNames = {standard:'4面子＋1雀頭',any_pair:'対子が1組あればOK',two_pairs:'対子が2組あればOK',any_triplet:'刻子が1組あればOK',all_simples:'すべて2〜8の数牌'};
 const fieldNames = {win_condition:'あがり条件',seven_pairs:'七対子',joker:'ジョーカー',win_points:'あがり点',bonus_suit:'ボーナス牌種',bonus_points:'1枚ボーナス',reverse_order:'順番',turn_seconds:'持ち時間',speech_keyword:'合言葉',speech_effect:'合言葉効果',speech_points:'合言葉得点'};
-let backend = 'pending', socket = null, reconnectTimer, heartbeat, reconnectDelay = 1000, lastPong = 0;
-let session = null, state = null, selected = -1, handSignature = '', lastVersion = -1, busy = false, polling = false, failed = false, clockOffset = 0, toastTimeout;
+let socket = null, reconnectTimer, heartbeat, reconnectDelay = 1000, lastPong = 0;
+let session = null, state = null, selected = -1, handSignature = '', lastVersion = -1, busy = false, clockOffset = 0, toastTimeout;
 try { session = JSON.parse(sessionStorage.getItem('ittamon-session')); } catch { /* storage is optional */ }
 function saveSession(value) { session = value; try { if(value) sessionStorage.setItem('ittamon-session',JSON.stringify(value)); else sessionStorage.removeItem('ittamon-session'); } catch {} }
 function toast(text, error=false) { $('toast').textContent=text; $('toast').className='toast'+(error?' error':''); $('toast').hidden=false; clearTimeout(toastTimeout); toastTimeout=setTimeout(()=>{$('toast').hidden=true;},6500); }
@@ -23,7 +23,7 @@ async function action(type, data={}) {
     const result=await request('/api/action',{action:type,code:session?.code,...data});
     if(result.token) saveSession({token:result.token,code:result.state.code});
     if(result.left) { disconnectSocket(); saveSession(null); state=null; show('home'); return; }
-    if(result.state) { render(result.state); if(backend==='websocket') connectSocket(); }
+    if(result.state) { render(result.state); connectSocket(); }
     return result;
   } catch(e) { toast(e.name==='TimeoutError'?'接続がタイムアウトしました。サーバーを確認してください。':e.message,true); }
   finally { busy=false; }
@@ -54,9 +54,9 @@ function render(s) {
   if(state?.code===s.code&&s.version<state.version)return;
   if(state?.code!==s.code){lastVersion=-1;handSignature='';selected=-1;}
   const previous=state;
-  state=s; clockOffset=s.server_time*1000-Date.now(); failed=false;
+  state=s; clockOffset=s.server_time*1000-Date.now();
   $('connection').classList.remove('offline');
-  $('connection').innerHTML='<i></i> '+(backend==='websocket'?'ONLINE TABLE':'LAN PARTY');
+  $('connection').innerHTML='<i></i> ONLINE TABLE';
   $('net-status').textContent='● 同期中';
   if(s.status==='lobby') { show('lobby'); renderLobby(s); return; }
   show('game');
@@ -141,16 +141,9 @@ function renderTimer() {
   $('timer').textContent=state.pending?'判定中は時計が止まります':state.claim?`ロン受付 あと ${remaining} 秒`:`打牌まで ${remaining} 秒`;
   $('timer').classList.toggle('urgent',!state.pending&&remaining<=8);
 }
-async function poll() {
-  if(backend!=='poll'||!session||polling||busy) return;
-  polling=true;
-  try { const result=await request('/api/state/'+encodeURIComponent(session.code)); if(!busy) render(result.state); }
-  catch(e) { failed=true; $('connection').classList.add('offline'); $('connection').innerHTML='<i></i> 再接続中'; $('net-status').textContent='再接続中…'; if(/参加情報|部屋が見つかりません/.test(e.message)) { saveSession(null);state=null;show('home');toast(e.message,true); } }
-  finally { polling=false; }
-}
 async function copyInvite() {
   const url=location.origin+'/?room='+session.code;
-  try { if(navigator.clipboard&&window.isSecureContext) await navigator.clipboard.writeText(url); else { const input=document.createElement('textarea');input.value=url;document.body.appendChild(input);input.select();const copied=document.execCommand('copy');input.remove();if(!copied)throw Error(); } toast(backend==='websocket'?'招待URLをコピーしました。友達に送ってください。':'招待URLをコピーしました。同じWi-Fiの友達に送ってください。'); }
+  try { if(navigator.clipboard&&window.isSecureContext) await navigator.clipboard.writeText(url); else { const input=document.createElement('textarea');input.value=url;document.body.appendChild(input);input.select();const copied=document.execCommand('copy');input.remove();if(!copied)throw Error(); } toast('招待URLをコピーしました。友達に送ってください。'); }
   catch { toast('招待URL：'+url); }
 }
 $('entry-form').addEventListener('submit',e=>{e.preventDefault();action('create',{name:$('name').value.trim()});});
@@ -179,7 +172,7 @@ function offline() {
   $('connection').classList.add('offline');$('connection').innerHTML='<i></i> 再接続中';$('net-status').textContent='再接続中…';
 }
 function connectSocket() {
-  if(backend!=='websocket'||!session) return;
+  if(!session) return;
   if(socket&&(socket.readyState===WebSocket.OPEN||socket.readyState===WebSocket.CONNECTING)) return;
   clearTimeout(reconnectTimer);
   const current={...session}, url=new URL('/api/ws/'+current.code,location.href);
@@ -212,26 +205,20 @@ function connectSocket() {
 }
 async function boot() {
   try {
-    const health=await request('/api/health');backend=health.transport==='websocket'?'websocket':'poll';
+    const health=await request('/api/health');
     $('ai-status').textContent=health.ai?'● AI審判の準備ができています':'AIキーが未設定です。対局はできますがルール変更は利用できません。';
-    if(backend==='websocket') {
-      $('connection').innerHTML='<i></i> ONLINE TABLE';
-      $('entry-description').textContent='招待URLをシェアして、ブラウザで集合。';
-      $('hosting-note').textContent='招待URLがあれば、離れた場所からも遊べます。';
-      $('network-edition').textContent='ONLINE EDITION';
-      $('chat-limit').textContent='Enterで送信 / Shift + Enterで改行・1卓80回／全体1日'+health.daily_ai_limit+'回まで';
-    }
-    if(session&&backend==='websocket') {
+    $('chat-limit').textContent='Enterで送信 / Shift + Enterで改行・1卓80回／全体1日'+health.daily_ai_limit+'回まで';
+    if(session) {
       try { const result=await request('/api/state/'+encodeURIComponent(session.code));render(result.state);connectSocket(); }
       catch(e) {
         if(/参加情報|部屋が見つかりません/.test(e.message)){saveSession(null);toast(e.message,true);}
         else {offline();connectSocket();}
       }
-    } else if(session)poll();
+    }
   } catch { $('ai-status').textContent='サーバーに接続できません。再接続しています…';setTimeout(boot,5000); }
 }
 boot();
-setInterval(poll,900);setInterval(renderTimer,250);
+setInterval(renderTimer,250);
 document.addEventListener('visibilitychange',()=>{
-  if(!document.hidden){if(backend==='websocket'){if(socket?.readyState===WebSocket.OPEN)socket.send('ping');else connectSocket();}else poll();}
+  if(!document.hidden){if(socket?.readyState===WebSocket.OPEN)socket.send('ping');else connectSocket();}
 });

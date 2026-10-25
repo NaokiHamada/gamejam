@@ -12,7 +12,7 @@ try {
     const page = await context.newPage(); pages.push(page);
     page.on('pageerror', e => errors.push(e.message));
     await page.goto(base);
-    await page.waitForFunction(() => backend === 'websocket');
+    await page.waitForFunction(() => document.getElementById('chat-limit').textContent.includes('全体1日'));
     await page.locator('#name').fill(['無茶ぶり太郎', '白推し花子', '逆回り次郎', 'ポテト大臣'][i]);
   }
   await pages[0].locator('#create').click();
