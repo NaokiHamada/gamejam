@@ -29,7 +29,7 @@ current_programsが空ならreplace/removeは絶対に使わない。新規コ�
 ルールは誰が同じ条件を満たしても発動。名前や席を固定した永久優遇は禁止。負けている人を助けるなど条件付き逆転は歓迎。
 ルールは採用後のイベントから有効。提案した発言では新ルールは発動しない。現在ある発言ルールは安全判定後に発動する。
 基本設定: bonus_suit=none/m/p/s/z,bonus_points=100〜2000; speech_keyword=20文字までの合言葉,speech_effect=bonus/win,speech_points=100〜3000(各員払い)。あがり点は最大60000、最低1000。
-チー・ポン・大明槓は操作と前後フックに対応。暗槓・加槓・リーチ・ドラ・手牌や山の直接改変は未実装。全員同じ条件で適用。解説とtitle(40文字以内)は日本語で具体的な効果を正確に説明する。
+チー・ポン・大明槓は操作と前後フックに対応。親・全員の得点・各席の河・山の内容は専用言語で参照できる。手牌(他人も含む)・河・山・副露の間の移動(move_tiles)・コピー(copy_tiles)・削除(delete_tiles)、追加ツモ(draw_tiles)、手牌を戻す操作(return_tile/return_hand)に対応。暗槓・加槓・リーチ・ドラは未実装。全員同じ条件で適用。解説とtitle(40文字以内)は日本語で具体的な効果を正確に説明する。
 ${LANGUAGE}`;
 const properties = {
   bonus_suit: {type: 'string', enum: ['none', 'm', 'p', 's', 'z']}, bonus_points: {type: 'integer', minimum: 100, maximum: 2000},

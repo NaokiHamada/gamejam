@@ -69,7 +69,7 @@ function render(s) {
   }
   $('rivers').innerHTML=[['bottom',0],['right',1],['top',2],['left',3]].map(([pos,offset])=>`<div class="river river-${pos}" aria-label="${esc(s.players[(s.me+offset)%4].name)} の捨て牌">${s.players[(s.me+offset)%4].river.slice(-24).map(t=>tileHTML(t,true)).join('')}</div>`).join('');
   $('my-info').innerHTML=`<span class="wind-badge">${winds[s.me]}</span> <strong>${esc(s.players[s.me].name)}</strong><span class="score">${s.players[s.me].score.toLocaleString()} 点</span>`;
-  $('my-melds').innerHTML=(s.players[s.me].melds||[]).map(m=>`<span class="meld" aria-label="${{chi:'チー',pon:'ポン',kan:'カン'}[m.type]}">${m.tiles.map(t=>tileHTML(t,true)).join('')}</span>`).join('');
+  $('my-melds').innerHTML=(s.players[s.me].melds||[]).map(m=>`<span class="meld" aria-label="${{chi:'チー',pon:'ポン',kan:'カン',exposed:'公開牌'}[m.type]}">${m.tiles.map(t=>tileHTML(t,true)).join('')}</span>`).join('');
   $('call-options').innerHTML=(s.call_options||[]).map((o,i)=>`<button class="button quiet" data-call="${i}">${{chi:'チー',pon:'ポン',kan:'カン'}[o.type]} ${o.tiles.map(tileName).join('・')}</button>`).join('');
   $('call-options').querySelectorAll('[data-call]').forEach(b=>b.addEventListener('click',()=>{const o=state.call_options[Number(b.dataset.call)];action('call',{type:o.type,tiles:o.tiles});}));
   renderHand();
