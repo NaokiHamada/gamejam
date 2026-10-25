@@ -130,8 +130,11 @@ function renderLobby(s) {
   $('lobby-code').textContent=s.code; $('invite-url').value=location.origin+'/?room='+s.code;
   $('seats').innerHTML=Array.from({length:4},(_,i)=> {
     const p=s.players[i];
-    return p?`<div class="seat-card${i===s.me?' mine':''}"><span class="seat-avatar">${winds[i]}</span><strong>${esc(p.name)}${i===s.me?'（あなた）':''}</strong><span class="seat-state${p.ready?' is-ready':''}">${p.ready?'✓ 準備完了':!p.online?'接続待ち':i===0?'部屋主 · 準備中':'準備中'}</span></div>`:`<div class="seat-card empty"><span class="seat-avatar">${winds[i]}</span><strong>参加者を待っています</strong><span class="seat-state">空席</span></div>`;
+    return p?`<div class="seat-card${i===s.me?' mine':''}"><span class="seat-avatar">${winds[i]}</span><strong>${esc(p.name)}${i===s.me?'（あなた）':''}</strong><span class="seat-state${p.ready?' is-ready':''}">${p.npc?'NPC · 自動操作':p.ready?'✓ 準備完了':!p.online?'接続待ち':i===0?'部屋主 · 準備中':'準備中'}</span>${p.npc&&s.host?`<button class="button quiet" data-remove-npc="${i}" aria-label="${esc(p.name)}を外す">NPCを外す</button>`:''}</div>`:`<div class="seat-card empty"><span class="seat-avatar">${winds[i]}</span><strong>参加者を待っています</strong><span class="seat-state">空席</span></div>`;
   }).join('');
+  $('seats').querySelectorAll('[data-remove-npc]').forEach(button=>button.addEventListener('click',()=>action('remove_npc',{seat:Number(button.dataset.removeNpc)})));
+  $('add-npc').hidden=!s.host;
+  $('add-npc').disabled=s.players.length>=4;
   $('ready').textContent=s.players[s.me].ready?'✓ 準備完了（取り消す）':'準備完了';
   $('start').hidden=!s.host;
   $('start').disabled=s.players.length!==4||!s.players.every(p=>p.ready);
@@ -152,6 +155,7 @@ $('entry-form').addEventListener('submit',e=>{e.preventDefault();action('create'
 $('join-form').addEventListener('submit',e=>{e.preventDefault(); if(!$('name').value.trim()) { $('name').reportValidity();$('name').focus();return; } action('join',{name:$('name').value.trim(),code:$('room-code').value.toUpperCase().trim()});});
 $('ready').addEventListener('click',()=>action('ready'));
 $('start').addEventListener('click',()=>action('start'));
+$('add-npc').addEventListener('click',()=>action('add_npc'));
 $('leave').addEventListener('click',()=>action('leave'));
 $('discard').addEventListener('click',()=>{if(selected>=0)action('discard',{tile:state.hand[selected]});});
 $('tsumo').addEventListener('click',()=>action('tsumo'));

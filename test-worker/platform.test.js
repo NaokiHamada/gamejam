@@ -56,6 +56,51 @@ beforeEach(async () => {await reset();});
 afterEach(async () => {for (const socket of sockets.splice(0)) socket.close(1000);vi.unstubAllGlobals();await reset();});
 
 describe('WorkersとSQLite Durable Objects', () => {
+  it('NPCの操作をSQLite復元後にアラームで進め、WebSocketへ通知し、AI待ちでは停止する', async () => {
+    const host = await create();
+    expect((await action('add_npc', {...host, token: 'invalid'})).status).toBe(403);
+    for (let i = 0; i < 3; i++) expect((await action('add_npc', host)).status).toBe(200);
+    await action('ready', host); await action('start', host);
+    const socket = await ws(host);
+    await seed(host.code, room => {
+      room.turn = 1; room.npc_deadline = Date.now() / 1000 + 1.2;
+      for (const p of room.players) p.hand = '1m 3m 5m 7m 9m 1p 3p 5p 7p 9p 1s 3s 5s'.split(' ');
+      room.players[1].hand.push('7z');
+      room.wall = ['6z', '7z'];
+    });
+    await runInDurableObject(stubFor(host.code), async (instance, ctx) => {
+      const scheduled = await ctx.storage.getAlarm();
+      expect(scheduled).toBeLessThan(instance.room.deadline * 1000);
+      instance.room.npc_deadline = 0; await instance.save();
+    });
+    await evictDurableObject(stubFor(host.code));
+    const received = message(socket);
+    await runDurableObjectAlarm(stubFor(host.code));
+    const view = JSON.parse(await received).state;
+    expect(view.turn).toBe(2); expect(view.players[1].river).toHaveLength(1);
+    expect(view.players[1]).toMatchObject({npc: true, online: true, ready: true});
+    expect(view.ai_calls).toBe(0);
+    await runDurableObjectAlarm(stubFor(host.code));
+    expect((await state(host)).state.players[1].river).toHaveLength(1);
+    await seed(host.code, room => {
+      room.npc_deadline = 0; room.pending = true;
+      room.pending_job = {id: 'pause', started: Date.now() / 1000, before: {...room.rules}};
+    });
+    await runDurableObjectAlarm(stubFor(host.code));
+    expect((await state(host)).state.players[2].river).toHaveLength(0);
+    await runInDurableObject(stubFor(host.code), async instance => {
+      instance.room.npc_deadline = Date.now() / 1000 - 5;
+      instance.room.pending_job.started = Date.now() / 1000 - 10;
+      instance.resume(instance.room.pending_job);
+      expect(instance.room.npc_deadline).toBeGreaterThan(Date.now() / 1000 + 4);
+      await instance.save();
+    });
+  });
+  it('NPCだけを残して人間が退席した部屋を削除する', async () => {
+    const host = await create(); await action('add_npc', host);
+    expect((await action('leave', host)).left).toBe(true);
+    expect((await state(host)).status).toBe(404);
+  });
   it.each(['malicious', 'load', 'tokens', 'boring'])('違反%sで設定・コード・合言葉効果を実行せず減点し、復元後も二重処理しない', async violation => {
     const clients = await started();
     await seed(clients[0].code, room => {
