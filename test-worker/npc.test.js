@@ -31,16 +31,15 @@ describe('NPC', () => {
     expect(() => room.action('remove_npc', host, {seat: 2})).toThrow();
     expect(() => room.action('add_npc', host, {})).toThrow();
   });
-  it('孤立した字牌を切り、順子・対子・ジョーカーを残す', () => {
+  it('孤立した字牌を切り、順子・対子を残す', () => {
     expect(chooseDiscard(tiles('1m 2m 3m 4m 5m 6m 2p 3p 4p 7s 8s 1z 1z 7z'), DEFAULT_RULES)).toBe('7z');
-    expect(chooseDiscard(tiles('1m 2m 3m 4m 5m 6m 2p 3p 4p 7s 8s 1z 5z 7z'), {...DEFAULT_RULES, joker: '7z'})).not.toBe('7z');
-    expect(chooseDiscard(tiles('2m 3m 4m 5m 6m 7m 2p 3p 4p 5p 6p 7p 8s 1z'), {...DEFAULT_RULES, win_condition: 'all_simples'})).toBe('1z');
+    expect(chooseDiscard(tiles('2m 3m 4m 5m 6m 7m 2p 3p 4p 5p 6p 7p 8s 1z'), DEFAULT_RULES)).toBe('1z');
   });
   it('NPCの打牌が待ち時間後に進み、逆回りとAI停止を守る', () => {
     const room = solo(); room.turn = 1;
     room.players[1].hand = [...losing, '7z'];
     room.players[0].hand = room.players[2].hand = room.players[3].hand = [...losing];
-    room.rules.reverse_order = true;
+    room.direction = -1;
     expect(room.tick()).toBe(false);
     room.npc_deadline = 0; room.pending = true;
     expect(room.tick()).toBe(false); expect(room.npcDeadline()).toBe(Infinity);
@@ -49,9 +48,9 @@ describe('NPC', () => {
     expect(room.players[1].river).toHaveLength(1); expect(room.ai_calls).toBe(0);
     expect(room.tick()).toBe(false);
   });
-  it('変更された固定条件でツモし、次局へNPCと持ち点を引き継ぐ', () => {
+  it('変更された生成条件でツモし、次局へNPCと持ち点を引き継ぐ', () => {
     const room = solo(); room.turn = 1; room.npc_deadline = 0;
-    room.rules.win_condition = 'any_pair';
+    room.programs = [{id: 'pair', code: JSON.stringify([{on: 'win_check', when: true, do: [['win']]}]), memory: [{}, {}, {}, {}]}];
     room.players[1].hand = [...losing, '1m'];
     room.tick(); expect(room.result.winner).toBe(1);
     const score = room.players[1].score;

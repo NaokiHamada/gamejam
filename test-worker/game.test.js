@@ -17,24 +17,24 @@ describe('麻雀の判定と対局', () => {
     expect(view.players.every(p => !('hand' in p) && !('token' in p))).toBe(true);
   });
   it('通常形・七対子・国士未対応を判定する', () => {
-    expect(winning(hand('1m 2m 3m 4m 5m 6m 2p 3p 4p 7s 8s 9s 1z 1z'), DEFAULT_RULES)).toBe(true);
+    expect(winning(hand('1m 2m 3m 4m 5m 6m 2p 3p 4p 7s 8s 9s 1z 1z'))).toBe(true);
     const pairs = hand('1m 1m 3m 3m 5p 5p 7p 7p 4s 4s 2z 2z 3z 3z');
-    expect(winning(pairs, DEFAULT_RULES)).toBe(true);
-    expect(winning(pairs, {...DEFAULT_RULES, seven_pairs: false})).toBe(false);
-    expect(winning(hand('1m 1m 1m 1m 5p 5p 7p 7p 4s 4s 2z 2z 3z 3z'), DEFAULT_RULES)).toBe(false);
-    expect(winning(hand('1m 9m 1p 9p 1s 9s 1z 2z 3z 4z 5z 6z 7z 7z'), DEFAULT_RULES)).toBe(false);
+    expect(winning(pairs)).toBe(true);
+    expect(winning(pairs, 'standard')).toBe(false);
+    expect(winning(hand('1m 1m 1m 1m 5p 5p 7p 7p 4s 4s 2z 2z 3z 3z'))).toBe(false);
+    expect(winning(hand('1m 9m 1p 9p 1s 9s 1z 2z 3z 4z 5z 6z 7z 7z'))).toBe(false);
   });
   it('先頭より前のジョーカーを使う順子と雀頭を扱う', () => {
     const tiles = hand('5z 2m 3m 4m 5m 6m 2p 3p 4p 7s 8s 9s 1z 1z');
-    expect(winning(tiles, DEFAULT_RULES)).toBe(false);
-    expect(winning(tiles, {...DEFAULT_RULES, joker: '5z'})).toBe(true);
-    expect(winning(hand('5z 5z 3m 4m 5m 6m 2p 3p 4p 7s 8s 9s 1z 1z'), {...DEFAULT_RULES, joker: '5z'})).toBe(true);
+    expect(winning(tiles)).toBe(false);
+    expect(winning(tiles, 'default', '5z')).toBe(true);
+    expect(winning(hand('5z 5z 3m 4m 5m 6m 2p 3p 4p 7s 8s 9s 1z 1z'), 'default', '5z')).toBe(true);
   });
   it('ルール変更で同じ手があがれ、得点総計を保存する', () => {
     const room = started(), p = room.players[0];
     p.hand = hand('1m 1m 3m 5m 7m 9m 2p 4p 6p 8p 1s 3s 5s 7s');
     expect(() => room.win(p, 'tsumo')).toThrow();
-    room.rules.win_condition = 'any_pair'; room.rules.win_points = 12000;
+    room.programs = [{id: 'pair-score', code: JSON.stringify([{on: 'win_check', when: true, do: [['win']]}, {on: 'before_score', when: true, do: [['add_points', 6000]]}]), memory: [{}, {}, {}, {}]}];
     room.win(p, 'tsumo');
     expect(room.result.deltas).toEqual([12000, -4000, -4000, -4000]);
     expect(room.players.reduce((sum, q) => sum + q.score, 0)).toBe(100000);
@@ -42,7 +42,8 @@ describe('麻雀の判定と対局', () => {
   it('順番違反を拒否し、ロン受付と逆回りを反映する', () => {
     const room = started();
     expect(() => room.discard(room.players[1], room.players[1].hand[0])).toThrow();
-    room.rules.win_condition = 'any_pair'; room.rules.reverse_order = true;
+    room.direction = -1;
+    room.programs = [{id: 'pair', code: JSON.stringify([{on: 'win_check', when: true, do: [['win']]}]), memory: [{}, {}, {}, {}]}];
     room.players[1].hand = hand('1m 1m 2m 3m 4m 5m 6m 7m 8m 9m 1p 2p 3p');
     room.discard(room.players[0], room.players[0].hand.at(-1));
     expect(room.canRon(1)).toBe(true);

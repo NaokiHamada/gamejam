@@ -3,8 +3,7 @@ const $ = id => document.getElementById(id);
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const winds = ['東','南','西','北'];
 const suitNames = {m:'萬子',p:'筒子',s:'索子',z:'字牌',none:'なし'};
-const winNames = {standard:'4面子＋1雀頭',any_pair:'対子が1組あればOK',two_pairs:'対子が2組あればOK',any_triplet:'刻子が1組あればOK',all_simples:'すべて2〜8の数牌'};
-const fieldNames = {win_condition:'あがり条件',seven_pairs:'七対子',joker:'ジョーカー',win_points:'あがり点',bonus_suit:'ボーナス牌種',bonus_points:'1枚ボーナス',reverse_order:'順番',turn_seconds:'持ち時間',speech_keyword:'合言葉',speech_effect:'合言葉効果',speech_points:'合言葉得点'};
+const fieldNames = {bonus_suit:'ボーナス牌種',bonus_points:'1枚ボーナス',speech_keyword:'合言葉',speech_effect:'合言葉効果',speech_points:'合言葉得点'};
 let socket = null, reconnectTimer, heartbeat, reconnectDelay = 1000, lastPong = 0;
 let session = null, state = null, selected = -1, handSignature = '', lastVersion = -1, busy = false, clockOffset = 0, toastTimeout;
 try { session = JSON.parse(sessionStorage.getItem('ittamon-session')); } catch { /* storage is optional */ }
@@ -34,17 +33,12 @@ function tileHTML(tile, small=false, index=null) {
   const suit=tile[1], n=Number(tile[0]), honor=suit==='z';
   const number=honor?['','東','南','西','北','白','發','中'][n]:['','一','二','三','四','五','六','七','八','九'][n];
   const symbol=honor?'':{m:'萬',p:'筒',s:'索'}[suit];
-  const classes=`tile ${suit}${small?' small':''}${honor&&n===6?' green':''}${honor&&n===5?' white':''}${state?.rules.joker===tile?' joker':''}${index===selected?' selected':''}${index===13?' drawn':''}`;
+  const classes=`tile ${suit}${small?' small':''}${honor&&n===6?' green':''}${honor&&n===5?' white':''}${index===selected?' selected':''}${index===13?' drawn':''}`;
   const inner=`<span class="number">${number}</span>${symbol?`<span class="suit">${symbol}</span>`:''}`;
   return index===null?`<span class="${classes}" title="${tileName(tile)}">${inner}</span>`:`<button class="${classes}" data-tile="${index}" aria-label="${tileName(tile)}${index===selected?' 選択中':''}" aria-pressed="${index===selected}" ${state.can_discard?'':'disabled'}>${inner}</button>`;
 }
 function valueLabel(key,value) {
-  if(key==='win_condition') return winNames[value];
-  if(key==='joker') return tileName(value);
   if(key==='bonus_suit') return suitNames[value];
-  if(key==='seven_pairs') return value?'あり':'なし';
-  if(key==='reverse_order') return value?'逆回り ↺':'通常 ↻';
-  if(key==='turn_seconds') return value+'秒';
   if(key==='speech_keyword') return value?'「'+value+'」':'なし';
   if(key==='speech_effect') return value==='win'?'即あがり':'3人から得点';
   return Number(value).toLocaleString()+'点';
@@ -65,7 +59,7 @@ function render(s) {
   $('round').textContent=s.round;
   $('game-code').textContent=s.code;
   $('wall-count').textContent=s.wall;
-  $('direction').textContent=s.rules.reverse_order?'↺ 逆回り':'↻ 通常';
+  $('direction').textContent=s.direction===-1?'↺ 逆回り':'↻ 通常';
   $('turn-text').textContent=s.status==='finished'?'対局終了':s.pending?'✦ AI審判が考え中…':s.claim?'ロン・鳴き受付中':s.turn===s.me?'あなたの番です':s.players[s.turn].name+' の番';
   $('my-table-label').innerHTML=`${s.turn===s.me&&s.status==='playing'?'<strong>▼ あなたの番</strong>':'▼ あなた'} · ${esc(s.players[s.me].name)}`;
   for(const [offset,id] of [[1,'opponent-right'],[2,'opponent-top'],[3,'opponent-left']]) {
@@ -94,14 +88,15 @@ function render(s) {
   $('rule-banner-text').textContent=latest?latest.title:'まだ世界は、普通の麻雀。';
   $('rule-version').textContent='RULE '+String(s.history.length).padStart(2,'0');
   const r=s.rules;
-  const keys=['win_condition','seven_pairs','joker','win_points','reverse_order','turn_seconds'];
+  const keys=[];
   if(r.bonus_suit!=='none') keys.push('bonus_suit','bonus_points');
   if(r.speech_keyword) keys.push('speech_keyword','speech_effect',...(r.speech_effect==='bonus'?['speech_points']:[]));
   const openPrograms=new Set([...document.querySelectorAll('.generated-rule[open]')].map(el=>el.dataset.programId));
   $('current-rules').innerHTML=keys.map(key=>`<div class="rule-row${latest?.changes?.[key]?' changed':''}"><span>${fieldNames[key]}</span><strong>${esc(valueLabel(key,r[key]))}</strong></div>`).join('');
   $('current-rules').insertAdjacentHTML('beforeend',(s.programs||[]).map(p=>`<details class="generated-rule" data-program-id="${esc(p.id)}"${openPrograms.has(p.id)?' open':''}><summary>${esc(p.title)}${p.disabled?'（停止中）':''}</summary><p>${esc(p.explanation)}</p><pre>${esc(JSON.stringify(JSON.parse(p.code),null,2))}</pre></details>`).join(''));
+  if(!keys.length&&!s.programs?.length) $('current-rules').textContent='採用ルールはまだありません。';
   $('history-count').textContent=s.history.length;
-  $('history').innerHTML=s.history.length?[...s.history].reverse().map(h=>`<div class="history-item"><strong>${esc(h.title)}</strong><p>${esc(h.explanation)}</p>${h.points?`<p>減点：${h.points.toLocaleString()}点</p>`:''}${h.program?`<p>生成ルール：${esc(h.program.mode)} ${esc(h.program.id)}</p>`:''}${Object.entries(h.changes).map(([key,v])=>`<p>${fieldNames[key]}：${esc(valueLabel(key,v.before))} → ${esc(valueLabel(key,v.after))}</p>`).join('')}</div>`).join(''):'<div class="history-item">まだ改変はありません。最初のひと言をどうぞ。</div>';
+  $('history').innerHTML=s.history.length?[...s.history].reverse().map(h=>`<div class="history-item"><strong>${esc(h.title)}</strong><p>${esc(h.explanation)}</p>${h.points?`<p>減点：${h.points.toLocaleString()}点</p>`:''}${h.program?`<p>生成ルール：${esc(h.program.mode)} ${esc(h.program.id)}</p>`:''}${Object.entries(h.changes).filter(([key])=>Object.hasOwn(fieldNames,key)).map(([key,v])=>`<p>${fieldNames[key]}：${esc(valueLabel(key,v.before))} → ${esc(valueLabel(key,v.after))}</p>`).join('')}</div>`).join(''):'<div class="history-item">まだ改変はありません。最初のひと言をどうぞ。</div>';
   if(s.version!==lastVersion) {
     const messages=$('messages'), nearBottom=messages.scrollHeight-messages.scrollTop-messages.clientHeight<70;
     messages.innerHTML=s.messages.map(m=> {

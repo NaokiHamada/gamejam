@@ -1,4 +1,4 @@
-import {DEFAULT_RULES, TILES, WIN_NAMES, validateRules, GameError, require} from './game.js';
+import {DEFAULT_RULES, validateRules, GameError, require} from './game.js';
 
 import {compile, LANGUAGE, LIMITS} from './rule-program.js';
 
@@ -19,20 +19,20 @@ boring=全員の行動や勝利を永久禁止、常に同じ人だけ勝つ、�
 複数カテゴリに該当する場合は、秘密取得や攻撃ならmalicious、明示的にAI出力・トークン消費を浪費させる目的ならtokens、それ以外の計算・通信・保存の過負荷はloadを優先する。
 severityは1=軽度、2=重大、3=極めて重大。理由と減点の根拠をexplanationに日本語180文字以内で説明。減点額はサーバーがカテゴリ×severityで決める。悪意6000/12000/18000、負荷3000/6000/9000、浪費・退屈1500/3000/4500点。
 安全ならviolation=none,severity=0。会話はaccepted=false。安全だが実現できない提案も不採用として説明し、チョンボにしない。生成ミスとプレイヤーの違反を混同しない。
-ルール変更は既存rulesの該当項目だけ変更。固定設定で表せる提案にはコードを重複生成しない。例えば「対子1組であがれる、12000点、逆回り」はrulesのwin_condition=any_pair,win_points=12000,reverse_order=trueだけを変え、programは必ず{"mode":"none","id":"","code":""}にする。
-固定設定で表せないルールだけ専用言語のコードを生成しprogramに入れる。できないことをできたと偽らず部分採用は明示。
+rulesは牌種ボーナスと合言葉だけの設定。該当項目だけ変更する。
+あがり条件、七対子、ジョーカー、あがり点、順番、持ち時間には固定設定がない。他の自由な提案と同じく専用言語のprogramで変更する。
+初期状態は4面子＋1雀頭または七対子、ジョーカーなし、6000点、通常方向、45秒。あがり条件の置換はwin_checkでallow_winを使う。七対子禁止はmatches_handのstandard、ジョーカー指定はmatches_handの第2引数で表現できる。単に条件を追加する場合はwinを使える。あがり点はbefore_scoreのadd_pointsで初期6000点との差を加算。順番はdirectionを参照しreverse、持ち時間はturn_time。継続効果はbefore_draw/before_turnなど毎回の適切なイベントに登録し、提案発言では発動しない点を説明する。
+専用言語でできないことをできたと偽らず部分採用は明示。
+固定設定だけを変更する場合はprogramを{"mode":"none","id":"","code":""}にする。生成コードが必要な提案ではprogramに変更を入れる。
 programは{mode:none/add/replace/remove/clear,id,code}。noneはid/code空。addは新しい英数字_ハイフンのid(1〜24字)、replace/removeはcurrent_programsのid。remove/clearのcodeは空。clearは生成ルールすべてを撤回。add/replaceはcodeにJSONの命令列。今回は1コードだけ生成。既存コードの丸ごと再出力は不要。
-current_programsが空ならreplace/removeは絶対に使わない。新規コードは{"mode":"add","id":"新しいID","code":"JSON命令列"}。replaceは実在する同じIDの生成コードを書き換える場合だけ使い、固定rulesの変更には使わない。
+current_programsが空ならreplace/removeは絶対に使わない。新規コードは{"mode":"add","id":"新しいID","code":"JSON命令列"}。replaceは実在する同じIDの生成コードを書き換える場合だけ使う。
 ルールは誰が同じ条件を満たしても発動。名前や席を固定した永久優遇は禁止。負けている人を助けるなど条件付き逆転は歓迎。
 ルールは採用後のイベントから有効。提案した発言では新ルールは発動しない。現在ある発言ルールは安全判定後に発動する。
-基本設定: win_condition=standard/any_pair/two_pairs/any_triplet/all_simples(副露なしは14枚、副露ありは手元14-副露数×3枚); seven_pairs=七対子可; joker=none/牌コード(m萬p筒s索z字、1z東2z南3z西4z北5z白6z發7z中); win_points=1000〜24000; bonus_suit=none/m/p/s/z,bonus_points=100〜2000; reverse_order=逆回り; turn_seconds=15〜120; speech_keyword=20文字までの合言葉,speech_effect=bonus/win,speech_points=100〜3000(各員払い)。あがり点は最大60000、最低1000。
+基本設定: bonus_suit=none/m/p/s/z,bonus_points=100〜2000; speech_keyword=20文字までの合言葉,speech_effect=bonus/win,speech_points=100〜3000(各員払い)。あがり点は最大60000、最低1000。
 チー・ポン・大明槓は操作と前後フックに対応。暗槓・加槓・リーチ・ドラ・手牌や山の直接改変は未実装。全員同じ条件で適用。解説とtitle(40文字以内)は日本語で具体的な効果を正確に説明する。
 ${LANGUAGE}`;
 const properties = {
-  win_condition: {type: 'string', enum: Object.keys(WIN_NAMES)}, seven_pairs: {type: 'boolean'},
-  joker: {type: 'string', enum: ['none', ...TILES]}, win_points: {type: 'integer', minimum: 1000, maximum: 24000},
   bonus_suit: {type: 'string', enum: ['none', 'm', 'p', 's', 'z']}, bonus_points: {type: 'integer', minimum: 100, maximum: 2000},
-  reverse_order: {type: 'boolean'}, turn_seconds: {type: 'integer', minimum: 15, maximum: 120},
   speech_keyword: {type: 'string', maxLength: 20}, speech_effect: {type: 'string', enum: ['bonus', 'win']},
   speech_points: {type: 'integer', minimum: 100, maximum: 3000},
 };

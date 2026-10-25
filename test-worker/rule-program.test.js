@@ -54,7 +54,7 @@ describe('生成ルールの実行と制限', () => {
     room.players[0].hand[0] = '5z';
     room.discard(room.players[0], '5z');
     expect(room.players[0].score).toBe(26500);
-    expect(room.rules.reverse_order).toBe(true);
+    expect(room.direction).toBe(-1);
   });
   it('ツモ後の生成ルール即あがりで対局を完了する', () => {
     const room = roomWith(code('draw', true, [['win']]));
@@ -76,7 +76,7 @@ describe('生成ルールの実行と制限', () => {
   it('持ち時間に整数以外を適用しない', () => {
     const room = roomWith(code('speech', true, [['turn_time', ['/', 31, 2]]]));
     room.speech(room.players[0], 'テスト');
-    expect(room.rules.turn_seconds).toBe(45);
+    expect(room.turn_seconds).toBe(45);
     expect(room.programs[0].disabled).toBe(true);
   });
   it.each(['fetch', 'eval', 'constructor', '__proto__', 'while', 'import', 'getPrototypeOf'])(
@@ -132,5 +132,81 @@ describe('生成ルールの実行と制限', () => {
     expect(room.players[0].score).toBe(25000 + points / 3);
     expect(room.players.reduce((n, p) => n + p.score, 0)).toBe(100000);
     expect(room.messages.at(-1).kind).toBe('chonbo');
+  });
+});
+
+describe('旧固定項目を生成コードで扱う', () => {
+  const pair = '1m 1m 3m 5m 7m 9m 2p 4p 6p 8p 1s 3s 5s 7s'.split(' ');
+  const pairs = '1m 1m 3m 3m 5p 5p 7p 7p 4s 4s 2z 2z 3z 3z'.split(' ');
+  it('七対子の禁止・再許可・ジョーカーの判定を照会とツモ・ロンに反映する', () => {
+    const room = roomWith(code('win_check', true, [['allow_win', ['matches_hand', 'standard', 'none']]]));
+    const p = room.players[0]; p.hand = [...pairs];
+    const before = JSON.stringify(room);
+    expect(room.snapshot(p).can_tsumo).toBe(false);
+    expect(JSON.stringify(room)).toBe(before);
+    expect(() => room.win(p, 'tsumo')).toThrow();
+    room.programs = updatePrograms(room.programs, {...verdict(code('win_check', true,
+      [['allow_win', ['matches_hand', 'seven_pairs', 'none']]])), program: {mode: 'remove', id: 'custom', code: ''}});
+    expect(room.snapshot(p).can_tsumo).toBe(true);
+    const jokerCode = code('win_check', true, [['allow_win', ['matches_hand', 'default', '5z']]]);
+    room.programs = updatePrograms([], verdict(jokerCode));
+    p.hand = '5z 2m 3m 4m 5m 6m 2p 3p 4p 7s 8s 9s 1z 1z'.split(' ');
+    expect(room.snapshot(p).can_tsumo).toBe(true);
+    p.hand.pop(); room.claim = {from: 1, tile: '1z', passed: [], deadline: Date.now() / 1000 + 8};
+    expect(room.canRon(0)).toBe(true);
+    room.win(p, 'ron'); expect(room.result.winner).toBe(0);
+  });
+  it('条件置換で通常形を拒否し、登録順に判定を合成する', () => {
+    const room = roomWith(code('win_check', true, [['allow_win', false]]));
+    const standard = '1m 2m 3m 4m 5m 6m 2p 3p 4p 7s 8s 9s 1z 1z'.split(' ');
+    expect(room.isWinning(0, standard)).toBe(false);
+    room.programs.push({...room.programs[0], id: 'add', code: code('win_check', true, [['win']])});
+    expect(room.isWinning(0, standard)).toBe(true);
+    room.programs.push({...room.programs[0], id: 'last'});
+    expect(room.isWinning(0, standard)).toBe(false);
+    expect(room.isWinning(0, standard.slice(1))).toBe(false);
+    room.programs = updatePrograms([], verdict(code('win_check', true, [['win'], ['allow_win', false]])));
+    expect(room.isWinning(0, standard)).toBe(false);
+  });
+  it('任意条件・12000点・逆回り・20秒をコードで適用し、復元・初期化する', () => {
+    const room = roomWith(JSON.stringify([
+      {on: 'win_check', when: true, do: [['allow_win', ['some', 'hand', ['>=', ['copies', 'hand', ['get', 'tile']], 2]]]]},
+      {on: 'before_score', when: true, do: [['add_points', 6000]]},
+      {on: 'before_discard', when: ['==', ['get', 'direction'], 1], do: [['reverse']]},
+      {on: 'before_draw', when: true, do: [['turn_time', 20]]},
+    ]));
+    room.players[0].hand = [...pair];
+    expect(room.isWinning(0, pair)).toBe(true);
+    expect(room.isWinning(0, pair.map((t, i) => i === 0 ? '9s' : t))).toBe(false);
+    room.discard(room.players[0], '7s');
+    expect(room.direction).toBe(-1);
+    if (room.claim) { room.claim = null; room.advance(); }
+    expect(room.turn).toBe(3); expect(room.turn_seconds).toBe(20);
+    const restored = Room.restore(JSON.parse(JSON.stringify(room)));
+    expect(restored.direction).toBe(-1); expect(restored.turn_seconds).toBe(20);
+    restored.finish(0, 1, pair, 'ロン');
+    expect(restored.result.deltas).toEqual([12000, -12000, 0, 0]);
+    restored.action('reset_rules', restored.players[0], {});
+    expect(restored.direction).toBe(1); expect(restored.turn_seconds).toBe(45);
+    expect(restored.programs).toEqual([]);
+    expect(restored.rules).toEqual(DEFAULT_RULES);
+  });
+  it('旧設定を復元しても固定項目を公開・適用しない', () => {
+    const room = roomWith(code('win_check', true, [['allow_win', false]]));
+    room.rules = {...room.rules, win_condition: 'any_pair', seven_pairs: false, joker: '5z',
+      win_points: 24000, reverse_order: true, turn_seconds: 15};
+    const restored = Room.restore(JSON.parse(JSON.stringify(room)));
+    expect(restored.snapshot(restored.players[0]).rules).toEqual(DEFAULT_RULES);
+    expect(restored.isWinning(0, pair)).toBe(false);
+    restored.finish(0, 1, pair, 'ロン'); expect(restored.result.deltas[0]).toBe(6000);
+  });
+  it('照会以外の判定置換と不正な形・代用牌・真偽値を拒否する', () => {
+    expect(() => compile(code('draw', true, [['allow_win', true]]))).toThrow();
+    expect(() => compile(code('win_check', true, [['allow_win', ['matches_hand', 'unknown', 'none']]]))).toThrow();
+    for (const expr of [1, ['matches_hand', 'standard', 'secret']]) {
+      const room = roomWith(code('win_check', true, [['allow_win', expr]]));
+      expect(room.isWinning(0, pair)).toBe(false);
+      expect(room.programs[0].disabled).toBe(true);
+    }
   });
 });

@@ -7,12 +7,13 @@ it('Secrets Storeから実行時にキーを取得してAIへ渡す', async () =
   vi.stubGlobal('fetch', vi.fn(async (url, options) => {
     expect(url).toBe('https://api.openai.com/v1/responses');
     expect(options.headers.Authorization).toBe('Bearer fake-secret-from-store');
-    return Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({accepted: true, violation: 'none', severity: 0, program: {mode: 'none', id: '', code: ''},
-      title: '白がジョーカー', explanation: '白を好きな牌として使えます。', rules: {...DEFAULT_RULES, joker: '5z'}})}]}]});
+    return Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({accepted: true, violation: 'none', severity: 0, program: {mode: 'add', id: 'joker', code: JSON.stringify([{on: 'win_check', when: true, do: [['allow_win', ['matches_hand', 'default', '5z']]]}])},
+      title: '白がジョーカー', explanation: '白を好きな牌として使えます。', rules: {...DEFAULT_RULES}})}]}]});
   }));
   const result = await judge('白をジョーカーに', DEFAULT_RULES, {OPENAI_KEY_STORE: {get}});
   expect(get).toHaveBeenCalledOnce();
-  expect(result.rules.joker).toBe('5z');
+  expect(result.program.mode).toBe('add');
+  expect(result.rules).not.toHaveProperty('joker');
 });
 it('Secrets Storeのアクセス失敗を安全なメッセージへ変換する', async () => {
   const request = vi.fn();vi.stubGlobal('fetch', request);
@@ -61,6 +62,16 @@ it('推論ブロックを判定JSONと混ぜず、完成した出力だけを検
   vi.stubGlobal('fetch', vi.fn(async () => Response.json({status: 'completed', output: [{type: 'reasoning', summary: []},
     {type: 'message', content: [{type: 'output_text', text: JSON.stringify({accepted: true,
       title: '対子', explanation: '対子1組であがれます。', violation: 'none', severity: 0, program: {mode: 'none', id: '', code: ''},
-      rules: {...DEFAULT_RULES, win_condition: 'any_pair'}})}]}]})));
-  expect((await judge('提案', DEFAULT_RULES, {OPENAI_API_KEY: 'fake'})).rules.win_condition).toBe('any_pair');
+      rules: {...DEFAULT_RULES}})}]}]})));
+  expect((await judge('提案', DEFAULT_RULES, {OPENAI_API_KEY: 'fake'})).title).toBe('対子');
+});
+it('廃止した6項目をAI出力スキーマとルール検証で受け付けない', async () => {
+  const {SCHEMA, INSTRUCTIONS} = await import('../worker/referee.js');
+  for (const [key, value] of Object.entries({win_condition: 'standard', seven_pairs: true, joker: 'none',
+    win_points: 6000, reverse_order: false, turn_seconds: 45})) {
+    expect(SCHEMA.properties.rules.properties).not.toHaveProperty(key);
+    expect(() => validateVerdict({accepted: true, title: '変更', explanation: '', violation: 'none', severity: 0,
+      program: {mode: 'none', id: '', code: ''}, rules: {...DEFAULT_RULES, [key]: value}})).toThrow();
+  }
+  expect(INSTRUCTIONS).toContain('固定設定がない');
 });

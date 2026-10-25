@@ -301,7 +301,7 @@ export class MahjongRoom extends DurableObject {
     if (this.room.status === 'playing' && this.room.claim) {
       this.room.claim.deadline += elapsed;
       if (!this.room.players.some((_, i) => this.room.canRon(i))) this.room.advance();
-    } else if (this.room.status === 'playing' && (job.before.turn_seconds !== this.room.rules.turn_seconds || this.room.pending_job?.reset_deadline)) this.room.deadline = now() + this.room.rules.turn_seconds;
+    } else if (this.room.status === 'playing' && this.room.pending_job?.reset_deadline) this.room.deadline = now() + this.room.turn_seconds;
     this.room.pending = false; this.room.pending_job = null;
   }
   async expire() {
