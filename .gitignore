@@ -7,3 +7,10 @@ __pycache__/
 artifacts/
 *.local
 NETWORK_DIAGNOSTICS.md
+node_modules/
+.wrangler/
+dist/
+.dev.vars
+.dev.vars.*
+playwright-report/
+test-results/

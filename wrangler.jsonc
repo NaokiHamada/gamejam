@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ittamon-jan",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-10-25",
+  "workers_dev": true,
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
+  "durable_objects": {
+    "bindings": [
+      { "name": "ROOMS", "class_name": "MahjongRoom" },
+      { "name": "LIMITS", "class_name": "UsageLimits" }
+    ]
+  },
+  "migrations": [ { "tag": "v1", "new_sqlite_classes": ["MahjongRoom", "UsageLimits"] } ],
+  "secrets": { "required": ["OPENAI_API_KEY"] },
+  "vars": { "OPENAI_MODEL": "gpt-4.1-mini", "DAILY_AI_LIMIT": "100" },
+  "observability": { "enabled": true, "head_sampling_rate": 0.1, "traces": { "enabled": true, "head_sampling_rate": 0.01 } }
+}
