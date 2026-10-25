@@ -271,8 +271,6 @@ export class MahjongRoom extends DurableObject {
         try { programs = updatePrograms(this.room.programs, result); }
         catch (caught) { error = `${caught instanceof GameError ? caught.message : '生成ルールを適用できませんでした。'}既存ルールを維持します。減点はありません。`; }
         if (!error) {
-          // Apply only pre-existing speech rules, after the safety verdict.
-          this.room.speechEffects(this.room.players[job.seat], job.text);
           if (result.accepted) {
             const changes = Object.fromEntries(Object.entries(result.rules).filter(([key, value]) => value !== job.before[key])
               .map(([key, value]) => [key, {before: job.before[key], after: value}]));
@@ -286,7 +284,12 @@ export class MahjongRoom extends DurableObject {
               this.room.history = this.room.history.slice(-30);
               this.room.event('rule', result.explanation, {title: result.title, changes});
             } else this.room.event('judge', result.explanation);
+            if (['add', 'replace'].includes(result.program.mode)) {
+              this.room.applyAdoptedProgram(programs.find(p => p.id === result.program.id));
+            }
           } else this.room.event('judge', result.explanation);
+          // Install the verdict first, so the proposal itself uses the adopted rules.
+          this.room.speechEffects(this.room.players[job.seat], job.text);
         }
       }
       if (error) this.room.event('error', error);

@@ -21,13 +21,15 @@ severityは1=軽度、2=重大、3=極めて重大。理由と減点の根拠を
 安全ならviolation=none,severity=0。会話はaccepted=false。安全だが実現できない提案も不採用として説明し、チョンボにしない。生成ミスとプレイヤーの違反を混同しない。
 rulesは牌種ボーナスと合言葉だけの設定。該当項目だけ変更する。
 あがり条件、七対子、ジョーカー、あがり点、順番、持ち時間には固定設定がない。他の自由な提案と同じく専用言語のprogramで変更する。
-初期状態は4面子＋1雀頭または七対子、ジョーカーなし、6000点、通常方向、45秒。あがり条件の置換はwin_checkでallow_winを使う。七対子禁止はmatches_handのstandard、ジョーカー指定はmatches_handの第2引数で表現できる。単に条件を追加する場合はwinを使える。あがり点はbefore_scoreのadd_pointsで初期6000点との差を加算。順番はdirectionを参照しreverse、持ち時間はturn_time。継続効果はbefore_draw/before_turnなど毎回の適切なイベントに登録し、提案発言では発動しない点を説明する。
+初期状態は4面子＋1雀頭または七対子、ジョーカーなし、6000点、通常方向、45秒。あがり条件の置換はwin_checkでallow_winを使う。七対子禁止はmatches_handのstandard、ジョーカー指定はmatches_handの第2引数で表現できる。単に条件を追加する場合はwinを使える。あがり点はbefore_scoreのadd_pointsで初期6000点との差を加算。順番はdirectionを参照しreverse、持ち時間はturn_time。継続効果はbefore_draw/before_turnなど毎回の適切なイベントに登録する。
 専用言語でできないことをできたと偽らず部分採用は明示。
 固定設定だけを変更する場合はprogramを{"mode":"none","id":"","code":""}にする。生成コードが必要な提案ではprogramに変更を入れる。
 programは{mode:none/add/replace/remove/clear,id,code}。noneはid/code空。addは新しい英数字_ハイフンのid(1〜24字)、replace/removeはcurrent_programsのid。remove/clearのcodeは空。clearは生成ルールすべてを撤回。add/replaceはcodeにJSONの命令列。今回は1コードだけ生成。既存コードの丸ごと再出力は不要。
 current_programsが空ならreplace/removeは絶対に使わない。新規コードは{"mode":"add","id":"新しいID","code":"JSON命令列"}。replaceは実在する同じIDの生成コードを書き換える場合だけ使う。
 ルールは誰が同じ条件を満たしても発動。名前や席を固定した永久優遇は禁止。負けている人を助けるなど条件付き逆転は歓迎。
-ルールは採用後のイベントから有効。提案した発言では新ルールは発動しない。現在ある発言ルールは安全判定後に発動する。
+ルールは採用したその場から有効。新しい設定・コードを登録してから提案発言のbefore_speech/after_speechを実行するので、その発言自体も対象。安全判定前や違反発言では発動しない。
+新規・置換コードだけは直近2ステップ分（最大4個のツモ・打牌・鳴き・手番交代の前後イベント）にも順に即時適用する。元の通常操作や既存コードは再実行せず、現在の牌・得点に追加効果を適用する。発言・配牌・得点計算の過去イベントは再実行しない。イベントのactor/tile/call_type/sourceは当時の値、手牌等は現在の状態。局をまたいで遡らない。
+例：「私は親だから2つツモれる」はafter_draw、when=["==",["get","actor"],["get","dealer"]]、do=[["draw_tiles",1]]。通常の1枚に加えて1枚だけ追加する。直前の親のツモにも即適用され、そのターン中に計2枚ツモれる。即時適用のためだけのafter_speechも重ねて登録して二重発動させない。
 基本設定: bonus_suit=none/m/p/s/z,bonus_points=100〜2000; speech_keyword=20文字までの合言葉,speech_effect=bonus/win,speech_points=100〜3000(各員払い)。あがり点は最大60000、最低1000。
 チー・ポン・大明槓は操作と前後フックに対応。親・全員の得点・各席の河・山の内容は専用言語で参照できる。手牌(他人も含む)・河・山・副露の間の移動(move_tiles)・コピー(copy_tiles)・削除(delete_tiles)、追加ツモ(draw_tiles)、手牌を戻す操作(return_tile/return_hand)に対応。暗槓・加槓・リーチ・ドラは未実装。全員同じ条件で適用。解説とtitle(40文字以内)は日本語で具体的な効果を正確に説明する。
 ${LANGUAGE}`;

@@ -27,6 +27,35 @@ function claimRoom(tile = '5z') {
 const memory = room => room.programs[0].memory;
 
 describe('処理前後の生成フック', () => {
+  it('直近2ステップのみに新コードを適用し、通常ツモと既存コードは繰り返さない', () => {
+    const room = lobby(); room.start(room.players[0]);
+    const old = program(room, [hook('after_draw', [['award', 100]])]);
+    room.changeTurn(1); room.draw();
+    const wall = room.wall.length, hands = room.players.map(p => [...p.hand]);
+    const scores = room.players.map(p => p.score);
+    const added = {id: 'new', title: '新ルール', memory: [{}, {}, {}, {}], code: JSON.stringify([
+      hook('after_draw', [['award', 200], ['draw_tiles', 1]])])};
+    room.programs.push(added);
+    room.applyAdoptedProgram(added);
+    expect(room.recent_events).toHaveLength(4);
+    expect(room.players[0].hand).toEqual(hands[0]);
+    expect(room.players[1].hand).toHaveLength(hands[1].length + 1);
+    expect(room.wall).toHaveLength(wall - 1);
+    expect(room.players.map((p, i) => p.score - scores[i])).toEqual([-200, 600, -200, -200]);
+    expect(old.disabled).not.toBe(true);
+    room.status = 'finished'; room.start(room.players[0]);
+    expect(room.recent_events.map(e => e.seat)).toEqual([1, 1]);
+  });
+  it('履歴のない旧保存データも復元でき、過去のイベントを捏造しない', () => {
+    const original = lobby(); original.start(original.players[0]);
+    const data = structuredClone(original); delete data.recent_events;
+    const room = Room.restore(data);
+    const added = program(room, [hook('after_draw', [['draw_tiles', 1]])]);
+    const wall = room.wall.length;
+    room.applyAdoptedProgram(added);
+    expect(room.wall).toHaveLength(wall);
+    expect(room.recent_events).toEqual([]);
+  });
   it('開局・配牌は各席、最初のツモは親だけに処理前後の状態を渡す', () => {
     const room = lobby();
     program(room, [

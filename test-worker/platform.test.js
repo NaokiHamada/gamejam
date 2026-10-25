@@ -157,7 +157,7 @@ describe('WorkersとSQLite Durable Objects', () => {
     expect(restored.players).toEqual(view.players);
     expect(restored.messages.filter(m => m.kind === 'chonbo')).toHaveLength(1);
   });
-  it('発言から生成コードを登録し、次の安全な発言で発動してSQLiteから復元する', async () => {
+  it('採用した発言から生成コードを即時発動し、SQLiteから復元する', async () => {
     const clients = await started();
     const code = JSON.stringify([{on: 'speech', when: ['includes', ['get', 'text'], '祭り'], do: [['set', 'n', ['+', ['var', 'n'], 1]], ['award', 500]]}]);
     let calls = 0;
@@ -169,18 +169,44 @@ describe('WorkersとSQLite Durable Objects', () => {
     });
     await action('speech', clients[0], {text: '祭りと言うとボーナスにしよう'});
     const first = await settled(clients[0]);
-    expect(first.players[0].score).toBe(25000);
+    expect(first.players[0].score).toBe(26500);
     expect(first.programs[0].code).toBe(code);
     await action('speech', clients[1], {text: '祭り'});
     const second = await settled(clients[1]);
-    expect(second.players[1].score).toBe(26500);
+    expect(second.players[1].score).toBe(26000);
     expect(second.programs[0]).not.toHaveProperty('memory');
     vi.unstubAllGlobals();
     await evictDurableObject(stubFor(clients[0].code));
     await runInDurableObject(stubFor(clients[0].code), instance => {
+      expect(instance.room.programs[0].memory[0].n).toBe(1);
       expect(instance.room.programs[0].memory[1].n).toBe(1);
     });
     expect((await state(clients[0])).state.programs[0].code).toBe(code);
+  });
+  it('親のツモ後に採用した追加ツモを同じターンに適用し、復元後も重複しない', async () => {
+    const clients = await started(), host = clients[0];
+    const before = (await state(host)).state;
+    const code = JSON.stringify([{on: 'after_draw', when: ['==', ['get', 'actor'], ['get', 'dealer']], do: [['draw_tiles', 1]]}]);
+    vi.stubGlobal('fetch', () => Promise.resolve(Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({
+      accepted: true, violation: 'none', severity: 0, title: '親は2枚ツモ', explanation: '親は追加で1枚ツモれます。',
+      rules: {...DEFAULT_RULES}, program: {mode: 'add', id: 'dealer-draw', code}})}]}]})));
+    await evictDurableObject(stubFor(host.code));
+    await action('speech', host, {text: '私は親だから2つツモれる'});
+    const after = await settled(host);
+    expect(after.hand).toHaveLength(before.hand.length + 1);
+    expect(after.wall).toBe(before.wall - 1);
+    expect(after.turn).toBe(before.turn);
+    expect(after.can_discard).toBe(true);
+    await evictDurableObject(stubFor(host.code));
+    expect((await state(host)).state.hand).toEqual(after.hand);
+  });
+  it('採用した合言葉の固定設定も提案発言自体で発動する', async () => {
+    const clients = await started();
+    vi.stubGlobal('fetch', () => Promise.resolve(Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({
+      accepted: true, violation: 'none', severity: 0, title: '祭り', explanation: '祭りで500点。',
+      rules: {...DEFAULT_RULES, speech_keyword: '祭り', speech_points: 500}, program: {mode: 'none', id: '', code: ''}})}]}]})));
+    await action('speech', clients[0], {text: '祭りと言ったら500点'});
+    expect((await settled(clients[0])).players.map(p => p.score)).toEqual([26500, 24500, 24500, 24500]);
   });
   it('生成コードが不正なときはルール・得点を維持し、時計を再開する', async () => {
     const clients = await started();
