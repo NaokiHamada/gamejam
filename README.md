@@ -18,7 +18,7 @@ npm ci
 npm run dev
 ```
 
-`http://127.0.0.1:8787` を開いてください。開発用スクリプトは既存のキーをWranglerの子プロセスに渡します。別のキー入りファイルを作成せず、キーをコマンド引数や画面にも表示しません。ローカルの対局データは無視対象の `.wrangler/` に保存されます。キーがなくても、AIによる変更以外は検証できます。
+`http://127.0.0.1:8787` を開いてください。開発用スクリプトは既存のキーをWranglerの子プロセスに渡します。別のキー入りファイルを作成せず、キーをコマンド引数や画面にも表示しません。ローカルの対局データとキーを含まない開発用設定は、無視対象の `.wrangler/` に保存されます。本番のSecrets Storeには接続せず、ローカルのキーを使います。キーがなくても、AIによる変更以外は検証できます。
 
 初回のみCloudflareへログインし、公開：
 
@@ -27,9 +27,9 @@ npx wrangler login
 npm run deploy
 ```
 
-macOS／Linuxでは、`npm run deploy` が既存キーを標準入力経由でCloudflareのSecret `OPENAI_API_KEY` としてコードと一緒に登録します。`apikey.local` 自体はアップロードしません。ローカルにキーがなくても、すでに登録されたSecretは維持されます。
+公開版は **Cloudflare Secrets Store** に保存された `OPENAI_API_KEY` を、`OPENAI_KEY_STORE` バインディングの `get()` で実行時に取得します。Worker個別の環境変数Secretとは別の機能です。`apikey.local` はアップロードせず、既存のストアのキーも上書きしません。
 
-Windowsでの初回公開は `npx wrangler secret put OPENAI_API_KEY` で対話的にキーを登録し、`npx wrangler deploy` を使ってください。
+別アカウントへ公開する場合は、CloudflareダッシュボードでSecrets Storeへ `OPENAI_API_KEY` を登録し、Workersスコープを有効にしてください。そのストアIDを `wrangler.jsonc` の `secrets_store_secrets[].store_id` に設定します。ストアIDとキー名は設定情報で、キーの値はGitに含めません。
 
 完了時に表示される `https://...workers.dev` のURLを開きます。スマートフォンも同じURLで参加でき、同じWi-Fiである必要はありません。独自ドメインやDockerは不要です。Wranglerの認証で公開できるため、MCPの認証は必須ではありません。
 
@@ -67,7 +67,9 @@ python3 server.py
 
 ## APIキー
 
-プロジェクト直下の `apikey.local` にキーのみを1行で置くか、`OPENAI_API_KEY=...` 形式で記述してください。環境変数 `OPENAI_API_KEY` があれば優先します。キーはブラウザには送らず、HTTPでのファイル配信対象にも含めません。`apikey.local` は `.gitignore` に登録済みです。
+ローカル開発／Python版では、プロジェクト直下の `apikey.local` にキーのみを1行で置くか、`OPENAI_API_KEY=...` 形式で記述してください。環境変数 `OPENAI_API_KEY` があれば優先します。キーはブラウザには送らず、HTTPでのファイル配信対象にも含めません。`apikey.local` は `.gitignore` に登録済みです。
+
+Cloudflare公開版のキーはSecrets Storeで管理します。ローカルファイルの内容はデプロイに含めません。
 
 デフォルトのモデルは `gpt-4.1-mini`。必要なら `OPENAI_MODEL` 環境変数でStructured Outputsに対応したモデルに変更できます。
 

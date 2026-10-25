@@ -24,11 +24,14 @@ export function validateVerdict(result) {
 }
 
 export async function judge(text, rules, env) {
-  require(Boolean(env.OPENAI_API_KEY), 'AIキーが未設定です。部屋主にお知らせください。');
+  let key;
+  try { key = env.OPENAI_API_KEY || await env.OPENAI_KEY_STORE?.get(); }
+  catch { throw new GameError('AIキーを取得できませんでした。Secrets Storeの設定を確認してください。'); }
+  require(typeof key === 'string' && key.length > 0, 'AIキーが未設定です。部屋主にお知らせください。');
   let response;
   try {
     response = await fetch('https://api.openai.com/v1/responses', {
-      method: 'POST', headers: {'Content-Type': 'application/json', Authorization: `Bearer ${env.OPENAI_API_KEY}`},
+      method: 'POST', headers: {'Content-Type': 'application/json', Authorization: `Bearer ${key}`},
       body: JSON.stringify({model: env.OPENAI_MODEL || 'gpt-4.1-mini', store: false, instructions: INSTRUCTIONS,
         input: JSON.stringify({speech: text, current_rules: rules, defaults: DEFAULT_RULES}), max_output_tokens: 1200,
         text: {format: {type: 'json_schema', name: 'mahjong_rule', strict: true, schema: SCHEMA}}}),

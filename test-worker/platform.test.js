@@ -155,18 +155,18 @@ describe('WorkersとSQLite Durable Objects', () => {
     expect(large.status).toBe(413);
   });
   it('同時発言は1件だけをAI判定に送り、別の発言は副作用なく拒否する', async () => {
-    const clients = await started(); let resolve;
-    vi.stubGlobal('fetch', () => new Promise(done => {resolve = done;}));
-    try {
-      const results = await Promise.all([action('speech', clients[0], {text: '逆回り'}), action('speech', clients[1], {text: '対子で勝ち'})]);
-      expect(results.map(r => r.status).sort()).toEqual([200, 400]);
-      expect((await state(clients[0])).state.ai_calls).toBe(1);
-      expect((await state(clients[0])).state.messages.filter(m => m.kind === 'speech')).toHaveLength(1);
-    } finally {
-      resolve?.(Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({accepted: false,
-        title: '現状維持', explanation: '変更なしです。', rules: {...DEFAULT_RULES}})}]}]}));
-      await settled(clients[0]);
-    }
+    const clients = await started();
+    vi.stubGlobal('fetch', async () => {
+      // Both the timer and Response belong to the calling DO's I/O context.
+      await new Promise(resolve => setTimeout(resolve, 500));
+      return Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({accepted: false,
+        title: '現状維持', explanation: '変更なしです。', rules: {...DEFAULT_RULES}})}]}]});
+    });
+    const results = await Promise.all([action('speech', clients[0], {text: '逆回り'}), action('speech', clients[1], {text: '対子で勝ち'})]);
+    expect(results.map(r => r.status).sort()).toEqual([200, 400]);
+    expect((await state(clients[0])).state.ai_calls).toBe(1);
+    expect((await state(clients[0])).state.messages.filter(m => m.kind === 'speech')).toHaveLength(1);
+    await settled(clients[0]);
   });
   it('日次アラームの遅延で当日分のAI上限が消えない', async () => {
     const clients = await started(), limits = env.LIMITS.getByName('global');

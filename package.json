@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "node scripts/dev.mjs",
-    "deploy": "node scripts/deploy.mjs",
+    "deploy": "wrangler deploy",
     "test": "vitest run",
     "check": "node --check worker/index.js && node --check worker/game.js && node --check worker/referee.js && node --check public/app.js",
     "build": "wrangler deploy --dry-run --outdir dist",

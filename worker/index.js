@@ -54,7 +54,7 @@ export default {
     try {
       const url = new URL(request.url);
       if (url.pathname === '/api/health' && request.method === 'GET') {
-        return json({ok: true, ai: Boolean(env.OPENAI_API_KEY), model: env.OPENAI_MODEL || 'gpt-4.1-mini',
+        return json({ok: true, ai: Boolean(env.OPENAI_KEY_STORE || env.OPENAI_API_KEY), model: env.OPENAI_MODEL || 'gpt-4.1-mini',
           transport: 'websocket', daily_ai_limit: dailyLimit(env)});
       }
       if (url.pathname === '/api/action' && request.method === 'POST') {
@@ -213,7 +213,7 @@ export class MahjongRoom extends DurableObject {
             const text = data.text.trim();
             const instantWin = this.room.rules.speech_keyword && text.includes(this.room.rules.speech_keyword) && this.room.rules.speech_effect === 'win';
             if (this.room.status === 'playing' && !instantWin) {
-              require(this.env.OPENAI_API_KEY, 'AIキーが未設定です。部屋主にお知らせください。');
+              require(this.env.OPENAI_KEY_STORE || this.env.OPENAI_API_KEY, 'AIキーが未設定です。部屋主にお知らせください。');
               require(this.room.ai_calls < 80, 'この部屋のAI判定は80回までです。');
               await reserve(this.env, 'ai');
             }
