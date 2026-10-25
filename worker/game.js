@@ -1,0 +1,223 @@
+// Pure game rules. No platform APIs beyond Web Crypto; all state is serializable.
+export const TILES = [...'mps'].flatMap(s => Array.from({length: 9}, (_, i) => `${i + 1}${s}`))
+  .concat(Array.from({length: 7}, (_, i) => `${i + 1}z`));
+export const DEFAULT_RULES = Object.freeze({win_condition: 'standard', seven_pairs: true,
+  joker: 'none', win_points: 6000, bonus_suit: 'none', bonus_points: 500,
+  reverse_order: false, turn_seconds: 45, speech_keyword: '', speech_effect: 'bonus', speech_points: 300});
+export const WIN_NAMES = {standard: '4面子＋1雀頭', any_pair: '対子が1組あればOK',
+  two_pairs: '対子が2組あればOK', any_triplet: '刻子が1組あればOK', all_simples: '手牌がすべて2〜8の数牌'};
+export const now = () => Date.now() / 1000;
+export class GameError extends Error {
+  constructor(message, status = 400) { super(message); this.status = status; }
+}
+export function require(ok, message, status) { if (!ok) throw new GameError(message, status); }
+export function randomInt(max) {
+  const limit = Math.floor(0x100000000 / max) * max;
+  const bytes = new Uint32Array(1);
+  do { crypto.getRandomValues(bytes); } while (bytes[0] >= limit);
+  return bytes[0] % max;
+}
+export function token() { return [...crypto.getRandomValues(new Uint8Array(32))].map(n => n.toString(16).padStart(2, '0')).join(''); }
+export const sortedHand = hand => [...hand].sort((a, b) => TILES.indexOf(a) - TILES.indexOf(b));
+
+export function winning(hand, rules) {
+  if (hand.length !== 14 || hand.some(t => !TILES.includes(t))) return false;
+  const counts = TILES.map(t => hand.filter(x => x === t).length);
+  const jokerIndex = TILES.indexOf(rules.joker);
+  const wild = jokerIndex < 0 ? 0 : counts[jokerIndex];
+  if (jokerIndex >= 0) counts[jokerIndex] = 0;
+  const pairs = counts.reduce((sum, n) => sum + Math.floor(n / 2), 0);
+  const singles = counts.reduce((sum, n) => sum + n % 2, 0);
+  if (rules.win_condition === 'any_pair') return pairs > 0 || wild >= 2 || (wild > 0 && counts.some(Boolean));
+  if (rules.win_condition === 'two_pairs') { const used = Math.min(wild, singles); return pairs + used + Math.floor((wild - used) / 2) >= 2; }
+  if (rules.win_condition === 'any_triplet') return Math.max(...counts) + wild >= 3;
+  if (rules.win_condition === 'all_simples') return counts.every((n, i) => !n || (i < 27 && i % 9 > 0 && i % 9 < 8));
+  if (rules.seven_pairs && Math.max(...counts) <= 2 && singles <= wild &&
+      counts.filter(Boolean).length + Math.floor((wild - singles) / 2) === 7) return true;
+  const memo = new Map();
+  const meldable = (c, w) => {
+    const i = c.findIndex(Boolean);
+    if (i < 0) return w % 3 === 0;
+    const key = c.join(',') + ':' + w;
+    if (memo.has(key)) return memo.get(key);
+    const take = Math.min(3, c[i]);
+    if (w >= 3 - take) {
+      const rest = [...c]; rest[i] -= take;
+      if (meldable(rest, w - (3 - take))) { memo.set(key, true); return true; }
+    }
+    if (i < 27) {
+      const base = Math.floor(i / 9) * 9;
+      for (let start = Math.max(base, i - 2); start <= Math.min(i, base + 6); start++) {
+        const rest = [...c]; let missing = 0;
+        for (let j = start; j < start + 3; j++) { if (rest[j]) rest[j]--; else missing++; }
+        if (missing <= w && meldable(rest, w - missing)) { memo.set(key, true); return true; }
+      }
+    }
+    memo.set(key, false); return false;
+  };
+  for (let i = 0; i < counts.length; i++) {
+    if (!counts[i]) continue;
+    const take = Math.min(2, counts[i]);
+    if (wild >= 2 - take) {
+      const rest = [...counts]; rest[i] -= take;
+      if (meldable(rest, wild - (2 - take))) return true;
+    }
+  }
+  return wild >= 2 && meldable(counts, wild - 2);
+}
+
+export function validateRules(rules) {
+  require(rules && typeof rules === 'object' && !Array.isArray(rules) &&
+    Object.keys(rules).length === Object.keys(DEFAULT_RULES).length &&
+    Object.keys(DEFAULT_RULES).every(key => Object.hasOwn(rules, key)), 'ルールの形式が不正です。');
+  for (const [key, values] of Object.entries({win_condition: Object.keys(WIN_NAMES), joker: ['none', ...TILES],
+    bonus_suit: ['none', 'm', 'p', 's', 'z'], speech_effect: ['bonus', 'win']})) {
+    require(values.includes(rules[key]), '未対応のルールです。');
+  }
+  for (const [key, lo, hi] of [['win_points', 1000, 24000], ['bonus_points', 100, 2000],
+    ['turn_seconds', 15, 120], ['speech_points', 100, 3000]]) {
+    require(Number.isInteger(rules[key]) && rules[key] >= lo && rules[key] <= hi, 'ルールの数値が範囲外です。');
+  }
+  for (const key of ['seven_pairs', 'reverse_order']) require(typeof rules[key] === 'boolean', 'ルールの値が不正です。');
+  require(typeof rules.speech_keyword === 'string' && [...rules.speech_keyword].length <= 20, '合言葉は20文字以内です。');
+}
+
+export class Room {
+  constructor(code) {
+    Object.assign(this, {code, players: [], status: 'lobby', rules: {...DEFAULT_RULES}, history: [], messages: [],
+      pending: false, ai_calls: 0, round: 0, version: 0, wall: [], turn: 0, claim: null, deadline: 0,
+      result: null, created: now(), touched: now(), pending_job: null});
+  }
+  static restore(data) { return Object.assign(new Room(data.code), data); }
+  event(kind, text, extra = {}) {
+    this.version++;
+    this.touched = now();
+    this.messages.push({id: this.version, kind, text, time: now(), ...extra});
+    this.messages = this.messages.slice(-120);
+  }
+  join(name) {
+    require(this.status === 'lobby', 'この部屋は対局中です。');
+    require(this.players.length < 4, 'この部屋は満席です。');
+    require(typeof name === 'string' && [...name.trim()].length >= 1 && [...name.trim()].length <= 12, '名前を1〜12文字で入力してください。');
+    const p = {token: token(), name: name.trim(), score: 25000, hand: [], river: [], ready: false, seen: now(), last_speech: 0};
+    this.players.push(p); this.event('system', `${p.name} が着席しました。`); return p;
+  }
+  player(auth) {
+    // Token size is public (64 hex characters); compare fixed-size buffers in constant time.
+    const input = new TextEncoder().encode(typeof auth === 'string' ? auth : '');
+    const padded = new Uint8Array(64); padded.set(input.subarray(0, 64));
+    const match = this.players.find(p => crypto.subtle.timingSafeEqual(new TextEncoder().encode(p.token), padded));
+    return input.length === 64 ? match : undefined;
+  }
+  start(p) {
+    require(p === this.players[0], '部屋主だけが開始できます。');
+    require(this.status === 'lobby' || this.status === 'finished', 'すでに対局中です。');
+    require(!this.pending, 'AIの判定を待ってください。');
+    require(this.players.length === 4 && this.players.every(q => q.ready), '4人全員の準備完了を待ってください。');
+    this.round++; this.status = 'playing'; this.result = this.claim = null;
+    this.wall = Array.from({length: 4}, () => TILES).flat();
+    for (let i = this.wall.length - 1; i > 0; i--) { const j = randomInt(i + 1); [this.wall[i], this.wall[j]] = [this.wall[j], this.wall[i]]; }
+    for (const q of this.players) { q.hand = sortedHand(Array.from({length: 13}, () => this.wall.pop())); q.river = []; }
+    this.turn = (this.round - 1) % 4; this.draw();
+    this.event('system', `第${this.round}局、開局。言ったもん勝ち、はじめましょう。`);
+  }
+  draw() {
+    if (!this.wall.length) {
+      this.status = 'finished';
+      this.result = {winner: null, text: '流局。山牌がなくなりました。', deltas: [0, 0, 0, 0], hand: []};
+      this.event('result', this.result.text); return;
+    }
+    this.players[this.turn].hand.push(this.wall.pop()); this.deadline = now() + this.rules.turn_seconds;
+  }
+  canRon(i) {
+    return Boolean(this.claim && i !== this.claim.from && !this.claim.passed.includes(i) &&
+      winning([...this.players[i].hand, this.claim.tile], this.rules));
+  }
+  discard(p, tile) {
+    require(this.status === 'playing' && !this.pending, 'いまは打牌できません。');
+    require(!this.claim && p === this.players[this.turn], 'あなたの打牌順ではありません。');
+    require(typeof tile === 'string' && p.hand.includes(tile), 'その牌は手牌にありません。');
+    p.hand.splice(p.hand.indexOf(tile), 1); p.hand = sortedHand(p.hand); p.river.push(tile);
+    this.claim = {tile, from: this.turn, passed: [], deadline: now() + 8};
+    this.event('discard', `${p.name} が打牌。`, {tile, seat: this.turn});
+    if (!this.players.some((_, i) => this.canRon(i))) this.advance();
+  }
+  advance() { this.claim = null; this.turn = (this.turn + (this.rules.reverse_order ? 3 : 1)) % 4; this.draw(); }
+  win(p, method) {
+    require(this.status === 'playing' && !this.pending, 'いまはあがれません。');
+    const i = this.players.indexOf(p);
+    if (method === 'ron') {
+      require(this.canRon(i), 'ロンできる手牌ではありません。');
+      this.finish(i, this.claim.from, [...p.hand, this.claim.tile], 'ロン');
+    } else {
+      require(!this.claim && i === this.turn && winning(p.hand, this.rules), 'ツモあがりできる手牌ではありません。');
+      this.finish(i, null, p.hand, 'ツモ');
+    }
+  }
+  finish(winner, loser, hand, label) {
+    const points = Math.min(60000, this.rules.win_points + hand.filter(t => t[1] === this.rules.bonus_suit).length * this.rules.bonus_points);
+    const deltas = [0, 0, 0, 0];
+    if (loser === null) { const share = Math.ceil(points / 300) * 100; deltas.fill(-share); deltas[winner] = share * 3; }
+    else { deltas[winner] = points; deltas[loser] = -points; }
+    this.players.forEach((p, i) => { p.score += deltas[i]; });
+    this.status = 'finished'; this.claim = null;
+    this.result = {winner, text: `${this.players[winner].name} の${label}！ +${deltas[winner].toLocaleString('en-US')}点`, deltas, hand: sortedHand(hand)};
+    this.event('result', this.result.text);
+  }
+  tick() {
+    if (this.status !== 'playing' || this.pending) return false;
+    if (this.claim && now() >= this.claim.deadline) { this.advance(); this.version++; return true; }
+    if (!this.claim && now() >= this.deadline) {
+      const p = this.players[this.turn]; this.event('system', `${p.name} は時間切れでツモ切り。`); this.discard(p, p.hand.at(-1)); return true;
+    }
+    return false;
+  }
+  action(action, p, data) {
+    switch (action) {
+      case 'ready': require(this.status === 'lobby', '準備を変更できません。'); p.ready = !p.ready; this.event('system', `${p.name}：${p.ready ? '準備完了！' : '準備中'}`); break;
+      case 'start': this.start(p); break;
+      case 'discard': this.discard(p, data.tile); break;
+      case 'tsumo': case 'ron': this.win(p, action); break;
+      case 'pass': {
+        const i = this.players.indexOf(p);
+        require(this.status === 'playing' && !this.pending && this.canRon(i), '見送るロンがありません。');
+        this.claim.passed.push(i); this.version++;
+        if (!this.players.some((_, j) => this.canRon(j))) this.advance(); break;
+      }
+      case 'reset_rules':
+        require(p === this.players[0] && this.status !== 'playing' && !this.pending, '部屋主が局の合間にリセットできます。');
+        this.rules = {...DEFAULT_RULES};
+        this.history.push({title: '初期ルールに戻しました', explanation: '次の局から初期ルールで対戦します。', changes: {}, by: p.name});
+        this.history = this.history.slice(-30); this.event('rule', '初期ルールに戻しました。'); break;
+      case 'leave':
+        require(this.status === 'lobby', '対局開始後は席を保持します。同じタブで復帰できます。');
+        this.players.splice(this.players.indexOf(p), 1); this.event('system', `${p.name} が退席しました。`); return {left: true};
+      default: throw new GameError('操作が見つかりません。');
+    }
+    return {};
+  }
+  speech(p, text) {
+    p.last_speech = now();
+    this.event('speech', text, {seat: this.players.indexOf(p), name: p.name});
+    if (this.status !== 'playing') return false;
+    if (this.rules.speech_keyword && text.includes(this.rules.speech_keyword)) {
+      const i = this.players.indexOf(p);
+      if (this.rules.speech_effect === 'win') { this.finish(i, null, p.hand, '合言葉あがり'); return false; }
+      const points = this.rules.speech_points;
+      this.players.forEach((q, j) => { q.score += points * (j === i ? 3 : -1); });
+      this.event('system', `合言葉「${this.rules.speech_keyword}」発動！ ${p.name} が各員から${points.toLocaleString('en-US')}点ずつ獲得。`);
+    }
+    return true;
+  }
+  snapshot(p, connected) {
+    const i = this.players.indexOf(p), active = this.status === 'playing' && !this.pending;
+    return structuredClone({code: this.code, me: i, host: i === 0, status: this.status, version: this.version,
+      round: this.round, wall: this.wall.length, turn: this.turn, rules: this.rules,
+      players: this.players.map(q => ({name: q.name, score: q.score, ready: q.ready,
+        online: connected ? connected.has(q.token) : now() - q.seen < 15, count: q.hand.length, river: q.river})),
+      hand: p.hand, messages: this.messages, history: this.history.slice(-30), pending: this.pending,
+      ai_calls: this.ai_calls, result: this.result, claim: this.claim ? {tile: this.claim.tile, from: this.claim.from, deadline: this.claim.deadline} : null,
+      deadline: this.claim?.deadline ?? this.deadline, server_time: now(), can_discard: active && !this.claim && i === this.turn,
+      can_tsumo: active && !this.claim && i === this.turn && winning(p.hand, this.rules), can_ron: active && this.canRon(i)});
+  }
+}
