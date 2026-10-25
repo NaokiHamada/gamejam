@@ -25,8 +25,8 @@ programは{mode:none/add/replace/remove/clear,id,code}。noneはid/code空。add
 current_programsが空ならreplace/removeは絶対に使わない。新規コードは{"mode":"add","id":"新しいID","code":"JSON命令列"}。replaceは実在する同じIDの生成コードを書き換える場合だけ使い、固定rulesの変更には使わない。
 ルールは誰が同じ条件を満たしても発動。名前や席を固定した永久優遇は禁止。負けている人を助けるなど条件付き逆転は歓迎。
 ルールは採用後のイベントから有効。提案した発言では新ルールは発動しない。現在ある発言ルールは安全判定後に発動する。
-基本設定: win_condition=standard/any_pair/two_pairs/any_triplet/all_simples(いずれも14枚); seven_pairs=七対子可; joker=none/牌コード(m萬p筒s索z字、1z東2z南3z西4z北5z白6z發7z中); win_points=1000〜24000; bonus_suit=none/m/p/s/z,bonus_points=100〜2000; reverse_order=逆回り; turn_seconds=15〜120; speech_keyword=20文字までの合言葉,speech_effect=bonus/win,speech_points=100〜3000(各員払い)。あがり点は最大60000、最低1000。
-鳴き・リーチ・ドラ・手牌や山の直接改変・プレイヤー追加は未実装。全員同じ条件で適用。解説とtitle(40文字以内)は日本語で具体的な効果を正確に説明する。
+基本設定: win_condition=standard/any_pair/two_pairs/any_triplet/all_simples(副露なしは14枚、副露ありは手元14-副露数×3枚); seven_pairs=七対子可; joker=none/牌コード(m萬p筒s索z字、1z東2z南3z西4z北5z白6z發7z中); win_points=1000〜24000; bonus_suit=none/m/p/s/z,bonus_points=100〜2000; reverse_order=逆回り; turn_seconds=15〜120; speech_keyword=20文字までの合言葉,speech_effect=bonus/win,speech_points=100〜3000(各員払い)。あがり点は最大60000、最低1000。
+チー・ポン・大明槓は操作と前後フックに対応。暗槓・加槓・リーチ・ドラ・手牌や山の直接改変は未実装。全員同じ条件で適用。解説とtitle(40文字以内)は日本語で具体的な効果を正確に説明する。
 ${LANGUAGE}`;
 const properties = {
   win_condition: {type: 'string', enum: Object.keys(WIN_NAMES)}, seven_pairs: {type: 'boolean'},

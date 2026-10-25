@@ -1,8 +1,11 @@
 // A bounded, capability-free language. Generated text is data, never JavaScript.
-export const LIMITS = Object.freeze({programs: 8, chars: 3000, totalChars: 12000, nodes: 160, depth: 12, steps: 4096});
-const EVENTS = ['draw', 'discard', 'speech', 'win_check', 'win_score'];
-const FIELDS = ['actor', 'turn', 'round', 'wall', 'text', 'tile', 'score', 'min_score', 'max_score', 'discard_count', 'hand_count'];
-const COLLECTIONS = ['hand', 'river', 'discards'];
+export const LIMITS = Object.freeze({programs: 8, chars: 3000, totalChars: 12000, nodes: 160, depth: 12, steps: 4096, hooks: 16});
+const ALIASES = {draw: 'after_draw', discard: 'after_discard', speech: 'after_speech'};
+export const EVENTS = Object.freeze(['draw', 'discard', 'speech', 'win_check', 'win_score',
+  ...['round_start', 'deal', 'draw', 'discard', 'call', 'turn', 'speech', 'score'].flatMap(name => [`before_${name}`, `after_${name}`])]);
+const SCORE_EVENTS = ['before_score', 'win_score', 'after_score'];
+const FIELDS = ['actor', 'turn', 'round', 'wall', 'text', 'tile', 'score', 'min_score', 'max_score', 'discard_count', 'hand_count', 'meld_count', 'call_type', 'source', 'points', 'loser', 'method'];
+const COLLECTIONS = ['hand', 'river', 'discards', 'melds'];
 const VARIABLES = /^[a-z][a-z0-9_]{0,15}$/;
 const ARITY = {'+': 2, '-': 2, '*': 2, '/': 2, '%': 2, '==': 2, '!=': 2, '>': 2, '>=': 2, '<': 2, '<=': 2,
   and: 2, or: 2, not: 1, if: 3, min: 2, max: 2, abs: 1, floor: 1, includes: 2, rank: 1, suit: 1};
@@ -18,7 +21,7 @@ function string(value) { check(typeof value === 'string', '生成コードの文
 export function compile(code) {
   check(typeof code === 'string' && code.length <= LIMITS.chars, '生成コードが長すぎます。');
   const hooks = JSON.parse(code);
-  check(Array.isArray(hooks) && hooks.length > 0 && hooks.length <= 4);
+  check(Array.isArray(hooks) && hooks.length > 0 && hooks.length <= LIMITS.hooks);
   let nodes = 0;
   const variables = new Set();
   const expression = (value, depth = 0, aggregate = false) => {
@@ -48,9 +51,9 @@ export function compile(code) {
       const [op, ...args] = action;
       // Queries have no side effects; scoring cannot trigger another event.
       check(hook.on !== 'win_check' || op === 'win');
-      check(hook.on !== 'win_score' || op === 'add_points');
-      check(op !== 'add_points' || hook.on === 'win_score');
-      check(op !== 'win' || ['speech', 'draw', 'win_check'].includes(hook.on));
+      check(!SCORE_EVENTS.includes(hook.on) || op === 'add_points' || (hook.on !== 'win_score' && op === 'set'));
+      check(op !== 'add_points' || SCORE_EVENTS.includes(hook.on));
+      check(op !== 'win' || ['speech', 'draw', 'after_speech', 'after_draw', 'win_check'].includes(hook.on));
       if (op === 'set') {
         check(typeof args[0] === 'string' && VARIABLES.test(args[0])); variables.add(args[0]);
         expression(args[1]);
@@ -111,7 +114,7 @@ export function execute(hooks, event, context, previous = {}) {
     }
   };
   for (const hook of hooks) {
-    if (hook.on !== event || !bool(evaluate(hook.when))) continue;
+    if ((ALIASES[hook.on] || hook.on) !== (ALIASES[event] || event) || !bool(evaluate(hook.when))) continue;
     for (const [op, a, b] of hook.do) {
       check(--steps >= 0);
       switch (op) {
@@ -132,12 +135,15 @@ export function execute(hooks, event, context, previous = {}) {
 
 export const LANGUAGE = `ルールコードはJavaScriptではなくJSONの命令列。codeは次の配列をJSON文字列化する:
 [{"on":"discard","when":["==",["get","tile"],"5z"],"do":[["award",500]]}]
-on: draw(ツモ後),discard(打牌後),speech(安全と判定された発言),win_check(あがり条件追加),win_score(あがり点補正)。1コードに最大4フック、各doは最大8命令。
+on: before_/after_とround_start(開局、各席1回),deal(配牌、各席1回),draw(ツモ),discard(打牌),call(鳴き),turn(手番交代、actorは次の手番),speech(安全判定された発言),score(あがり点計算)を結合したイベント名。beforeは処理前、afterは処理後。
+開局順: before_round_start(手牌・河を空にし山136枚を準備済み)→各席のbefore_deal→13枚配牌→after_deal→after_round_start→親のdraw。手番交代: before_turn→turn更新→after_turn→draw。鳴き: before_call→副露確定→after_call→turn前後→カンのみdraw。call_typeはchi/pon/kan(大明槓)、sourceは放銃席。チーは進行方向の次席だけ。ロン優先、ポン/カン優先、同順位は進行方向の近い席。暗槓・加槓は未対応。
+draw/discard/speechはそれぞれafter_draw/after_discard/after_speechの互換名。win_checkはあがり条件追加、win_scoreは既存のあがり点補正。1コード最大16フック、各do最大8命令。
 式: 数値/文字列/真偽値、["get",field]、["var",name](初期0)、[op,a,b]の+ - * / % == != > >= < <= and or min max includes、[op,a]のnot abs floor rank suit、["if",条件,真の場合,偽の場合]。
-field: actor(席0〜3),turn,round,wall(残枚数),text(発言),tile(対象牌),score(本人点),min_score,max_score,discard_count(全打牌数),hand_count。
-[op,collection,式]のcount,sum,every,someでhand(本人の手牌),river(本人の河),discards(全員の河)を走査。走査中のget tileは走査中の牌。走査の入れ子は禁止。
+field: actor(席0〜3),turn,round,wall(残枚数),text(発言),tile(対象牌),score(本人点),min_score,max_score,discard_count(河に残る全打牌数),hand_count,meld_count(副露数),call_type(鳴き種別、他は空文字),source(放銃席、他は-1),points(計算中の基本点、得点計算以外0),loser(ロン放銃席、ツモは-1),method(ツモ/ロン等のあがり名)。
+[op,collection,式]のcount,sum,every,someでhand(本人の手牌),river(本人の河),discards(全員の河),melds(本人の副露牌)を走査。走査中のget tileは走査中の牌。走査の入れ子は禁止。
 doの命令: ["award",式]本人が他3人から各点を獲得(負なら払う、1コード1イベント合計±3000以内)、["win"]あがり、["add_points",式]あがり点補正±24000、["reverse"]順番反転、["turn_time",式]15〜120秒、["set",name,式]本人専用のカウンタ更新(変数8個、英小文字開始の英数_16字以内、±100万)。カウンタは局をまたぎ保持。
-win_checkはwinだけ、win_scoreはadd_pointsだけ。winはspeech/draw/win_checkのみ。win_checkは通常のあがりにOR追加で、手牌14枚が必要。draw/speechのwinは即あがり。add_pointsはwin_score専用。
+win_checkはwinだけ、win_scoreはadd_pointsだけ。before_score/after_scoreはadd_pointsとsetだけ。winはafter_speech/after_drawとその互換名およびwin_checkのみ。win_checkは通常のあがりにOR追加で、手牌が14-副露数×3枚必要。after_draw/after_speechのwinは即あがり。add_pointsはbefore_score/win_score/after_score専用。
+点数計算: before_score(pointsは固定win_points)→牌種ボーナスとwin_score補正→1000〜60000に制限→after_score(pointsはこの計算結果)→再び1000〜60000に制限→支払い。各段階のadd_pointsはその段階の値へ加算。得点計算のhandは副露を含む全牌、他のイベントでは手元の牌。
 同じイベント内の条件と手牌・点数は開始時のスナップショット。setした値は同コード内の後続命令から読める。
 1コード3000文字/160ノード/深さ12/実行4096ステップ、同時8コード/合計12000文字。副作用は検証成功後に一括適用。外部アクセス・JS・ループ・再帰・動的プロパティ・任意関数呼び出し・他人の手牌参照は禁止。
 例: 3回発言ごとに各員から300点:

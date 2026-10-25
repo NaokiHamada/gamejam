@@ -22,9 +22,10 @@ export function randomInt(max) {
 export function token() { return [...crypto.getRandomValues(new Uint8Array(32))].map(n => n.toString(16).padStart(2, '0')).join(''); }
 export const sortedHand = hand => [...hand].sort((a, b) => TILES.indexOf(a) - TILES.indexOf(b));
 
-export function winning(hand, rules) {
-  if (hand.length !== 14 || hand.some(t => !TILES.includes(t))) return false;
-  const counts = TILES.map(t => hand.filter(x => x === t).length);
+export function winning(hand, rules, melds = []) {
+  if (hand.length !== 14 - melds.length * 3 || hand.some(t => !TILES.includes(t))) return false;
+  const tiles = rules.win_condition === 'standard' ? hand : [...hand, ...melds.flatMap(m => m.tiles)];
+  const counts = TILES.map(t => tiles.filter(x => x === t).length);
   const jokerIndex = TILES.indexOf(rules.joker);
   const wild = jokerIndex < 0 ? 0 : counts[jokerIndex];
   if (jokerIndex >= 0) counts[jokerIndex] = 0;
@@ -34,7 +35,7 @@ export function winning(hand, rules) {
   if (rules.win_condition === 'two_pairs') { const used = Math.min(wild, singles); return pairs + used + Math.floor((wild - used) / 2) >= 2; }
   if (rules.win_condition === 'any_triplet') return Math.max(...counts) + wild >= 3;
   if (rules.win_condition === 'all_simples') return counts.every((n, i) => !n || (i < 27 && i % 9 > 0 && i % 9 < 8));
-  if (rules.seven_pairs && Math.max(...counts) <= 2 && singles <= wild &&
+  if (!melds.length && rules.seven_pairs && Math.max(...counts) <= 2 && singles <= wild &&
       counts.filter(Boolean).length + Math.floor((wild - singles) / 2) === 7) return true;
   const memo = new Map();
   const meldable = (c, w) => {
@@ -87,10 +88,10 @@ export function validateRules(rules) {
 export class Room {
   constructor(code) {
     Object.assign(this, {code, players: [], status: 'lobby', rules: {...DEFAULT_RULES}, history: [], messages: [], programs: [],
-      pending: false, ai_calls: 0, round: 0, version: 0, wall: [], turn: 0, claim: null, deadline: 0,
+      pending: false, ai_calls: 0, round: 0, version: 0, wall: [], turn: 0, claim: null, deadline: 0, drawn: false,
       result: null, created: now(), touched: now(), pending_job: null, npc_deadline: 0});
   }
-  static restore(data) { return Object.assign(new Room(data.code), data); }
+  static restore(data) { return Object.assign(new Room(data.code), {drawn: data.status === 'playing' && !data.claim}, data); }
   event(kind, text, extra = {}) {
     this.version++;
     this.touched = now();
@@ -101,7 +102,7 @@ export class Room {
     require(this.status === 'lobby', 'この部屋は対局中です。');
     require(this.players.length < 4, 'この部屋は満席です。');
     require(typeof name === 'string' && [...name.trim()].length >= 1 && [...name.trim()].length <= 12, '名前を1〜12文字で入力してください。');
-    const p = {token: token(), name: name.trim(), score: 25000, hand: [], river: [], ready: false, seen: now(), last_speech: 0};
+    const p = {token: token(), name: name.trim(), score: 25000, hand: [], river: [], melds: [], ready: false, seen: now(), last_speech: 0};
     this.players.push(p); this.event('system', `${p.name} が着席しました。`); return p;
   }
   player(auth) {
@@ -119,37 +120,107 @@ export class Room {
     this.round++; this.status = 'playing'; this.result = this.claim = null;
     this.wall = Array.from({length: 4}, () => TILES).flat();
     for (let i = this.wall.length - 1; i > 0; i--) { const j = randomInt(i + 1); [this.wall[i], this.wall[j]] = [this.wall[j], this.wall[i]]; }
-    for (const q of this.players) { q.hand = sortedHand(Array.from({length: 13}, () => this.wall.pop())); q.river = []; }
-    this.turn = (this.round - 1) % 4; this.draw();
+    this.turn = (this.round - 1) % 4;
+    for (const q of this.players) { q.hand = []; q.river = []; q.melds = []; }
+    this.allPrograms('before_round_start');
+    for (let i = 0; i < this.players.length; i++) {
+      this.applyPrograms('before_deal', i);
+      this.players[i].hand = sortedHand(Array.from({length: 13}, () => this.wall.pop()));
+      this.applyPrograms('after_deal', i);
+    }
+    this.allPrograms('after_round_start');
+    this.draw();
     this.event('system', `第${this.round}局、開局。言ったもん勝ち、はじめましょう。`);
   }
+  allPrograms(event) { this.players.forEach((_, i) => this.applyPrograms(event, i)); }
   draw() {
+    if (this.status !== 'playing') return;
+    this.applyPrograms('before_draw', this.turn);
     if (!this.wall.length) {
       this.status = 'finished';
       this.result = {winner: null, text: '流局。山牌がなくなりました。', deltas: [0, 0, 0, 0], hand: []};
       this.event('result', this.result.text); return;
     }
     const tile = this.wall.pop();
-    this.players[this.turn].hand.push(tile); this.deadline = now() + this.rules.turn_seconds;
+    this.players[this.turn].hand.push(tile); this.drawn = true; this.deadline = now() + this.rules.turn_seconds;
     this.npc_deadline = now() + 1.2;
-    this.applyPrograms('draw', this.turn, {tile});
+    this.applyPrograms('after_draw', this.turn, {tile});
   }
   canRon(i, readOnly = false) {
-    return Boolean(this.claim && i !== this.claim.from && !this.claim.passed.includes(i) &&
+    return Boolean(this.claim && i !== this.claim.from && !this.claim.passed.includes(i) && !this.claim.requests?.some(r => r.seat === i) &&
       this.isWinning(i, [...this.players[i].hand, this.claim.tile], this.claim.tile, readOnly));
   }
   discard(p, tile) {
     require(this.status === 'playing' && !this.pending, 'いまは打牌できません。');
     require(!this.claim && p === this.players[this.turn], 'あなたの打牌順ではありません。');
     require(typeof tile === 'string' && p.hand.includes(tile), 'その牌は手牌にありません。');
+    this.applyPrograms('before_discard', this.turn, {tile});
+    this.drawn = false;
     p.hand.splice(p.hand.indexOf(tile), 1); p.hand = sortedHand(p.hand); p.river.push(tile);
-    this.claim = {tile, from: this.turn, passed: [], deadline: now() + 8};
+    this.claim = {tile, from: this.turn, passed: [], requests: [], deadline: now() + 8};
     this.npc_deadline = now() + 1.2;
     this.event('discard', `${p.name} が打牌。`, {tile, seat: this.turn});
-    this.applyPrograms('discard', this.turn, {tile});
-    if (!this.players.some((_, i) => this.canRon(i))) this.advance();
+    this.applyPrograms('after_discard', this.turn, {tile});
+    this.resolveClaim();
   }
-  advance() { this.claim = null; this.turn = (this.turn + (this.rules.reverse_order ? 3 : 1)) % 4; this.draw(); }
+  nextSeat(from) { return (from + (this.rules.reverse_order ? 3 : 1)) % 4; }
+  changeTurn(seat) {
+    this.applyPrograms('before_turn', seat);
+    this.turn = seat;
+    this.applyPrograms('after_turn', seat);
+    this.deadline = now() + this.rules.turn_seconds;
+    this.npc_deadline = now() + 1.2;
+  }
+  advance() {
+    if (this.status !== 'playing') return;
+    this.claim = null; this.changeTurn(this.nextSeat(this.turn)); this.draw();
+  }
+  callOptions(i) {
+    if (!this.claim || i === this.claim.from || this.claim.passed.includes(i) || this.claim.requests?.some(r => r.seat === i)) return [];
+    const p = this.players[i], tile = this.claim.tile, options = [];
+    if ((p.melds || []).length >= 4) return [];
+    const count = p.hand.filter(t => t === tile).length;
+    if (count >= 2) options.push({type: 'pon', tiles: [tile, tile]});
+    if (count >= 3 && this.wall.length) options.push({type: 'kan', tiles: [tile, tile, tile]});
+    if (i === this.nextSeat(this.claim.from) && tile[1] !== 'z') {
+      const rank = Number(tile[0]);
+      for (let start = Math.max(1, rank - 2); start <= Math.min(rank, 7); start++) {
+        const tiles = [start, start + 1, start + 2].filter(n => n !== rank).map(n => `${n}${tile[1]}`);
+        if (tiles.every(t => p.hand.includes(t))) options.push({type: 'chi', tiles});
+      }
+    }
+    return options;
+  }
+  call(p, type, tiles) {
+    require(this.status === 'playing' && !this.pending, 'いまは鳴けません。');
+    const i = this.players.indexOf(p);
+    require(Array.isArray(tiles) && tiles.length >= 2 && tiles.length <= 3 && tiles.every(t => TILES.includes(t)), '鳴く牌を指定してください。');
+    const option = this.callOptions(i).find(o => o.type === type && Array.isArray(tiles) &&
+      sortedHand(o.tiles).join(',') === sortedHand(tiles).join(','));
+    require(option, 'その鳴きはできません。');
+    this.claim.requests ||= [];
+    this.claim.requests.push({seat: i, ...option}); this.version++;
+    this.resolveClaim();
+  }
+  resolveClaim(expired = false) {
+    if (this.status !== 'playing' || !this.claim) return;
+    if (!expired && this.players.some((_, i) => this.canRon(i) || this.callOptions(i).length)) return;
+    const claim = this.claim;
+    const distance = seat => this.rules.reverse_order ? (claim.from - seat + 4) % 4 : (seat - claim.from + 4) % 4;
+    const request = [...(claim.requests || [])].sort((a, b) =>
+      Number(a.type === 'chi') - Number(b.type === 'chi') || distance(a.seat) - distance(b.seat))[0];
+    if (!request) { this.advance(); return; }
+    const p = this.players[request.seat], extra = {tile: claim.tile, call_type: request.type, source: claim.from};
+    this.applyPrograms('before_call', request.seat, extra);
+    for (const tile of request.tiles) p.hand.splice(p.hand.indexOf(tile), 1);
+    p.hand = sortedHand(p.hand); p.melds ||= [];
+    p.melds.push({type: request.type, tiles: sortedHand([...request.tiles, claim.tile]), from: claim.from});
+    this.players[claim.from].river.pop(); this.claim = null; this.drawn = false;
+    this.event('call', `${p.name} が${{chi: 'チー', pon: 'ポン', kan: 'カン'}[request.type]}。`, {seat: request.seat, tile: claim.tile});
+    this.applyPrograms('after_call', request.seat, extra);
+    this.changeTurn(request.seat);
+    if (request.type === 'kan') this.draw();
+  }
   win(p, method) {
     require(this.status === 'playing' && !this.pending, 'いまはあがれません。');
     const i = this.players.indexOf(p);
@@ -157,13 +228,19 @@ export class Room {
       require(this.canRon(i), 'ロンできる手牌ではありません。');
       this.finish(i, this.claim.from, [...p.hand, this.claim.tile], 'ロン');
     } else {
-      require(!this.claim && i === this.turn && this.isWinning(i, p.hand), 'ツモあがりできる手牌ではありません。');
+      require(!this.claim && this.drawn && i === this.turn && this.isWinning(i, p.hand), 'ツモあがりできる手牌ではありません。');
       this.finish(i, null, p.hand, 'ツモ');
     }
   }
   finish(winner, loser, hand, label) {
-    const bonus = this.programEffects('win_score', winner, {hand}).reduce((sum, e) => sum + e.bonus, 0);
-    const points = Math.max(1000, Math.min(60000, this.rules.win_points + hand.filter(t => t[1] === this.rules.bonus_suit).length * this.rules.bonus_points + bonus));
+    hand = [...hand, ...(this.players[winner].melds || []).flatMap(m => m.tiles)];
+    const extra = {hand, loser: loser ?? -1, method: label};
+    const correction = (event, points) => this.programEffects(event, winner, {...extra, points}).reduce((sum, e) => sum + e.bonus, 0);
+    const base = this.rules.win_points + correction('before_score', this.rules.win_points);
+    const bonus = hand.filter(t => t[1] === this.rules.bonus_suit).length * this.rules.bonus_points;
+    const clamp = n => Math.max(1000, Math.min(60000, n));
+    let points = clamp(base + bonus + correction('win_score', base + bonus));
+    points = clamp(points + correction('after_score', points));
     const deltas = [0, 0, 0, 0];
     if (loser === null) { const share = Math.ceil(points / 300) * 100; deltas.fill(-share); deltas[winner] = share * 3; }
     else { deltas[winner] = points; deltas[loser] = -points; }
@@ -174,14 +251,21 @@ export class Room {
   }
   tick() {
     if (this.status !== 'playing' || this.pending) return false;
-    if (this.claim && now() >= this.claim.deadline) { this.advance(); this.version++; return true; }
+    if (this.claim && now() >= this.claim.deadline) { this.resolveClaim(true); this.version++; return true; }
     if (now() >= this.npcDeadline()) {
       if (this.claim) {
         const winner = this.players.find((p, i) => p.npc && this.canRon(i));
         if (winner) { this.win(winner, 'ron'); return true; }
+        for (let i = 0; i < this.players.length && this.claim; i++) {
+          if (!this.players[i].npc || !this.callOptions(i).length) continue;
+          const options = this.callOptions(i);
+          const option = options.find(o => o.type === 'kan') || options.find(o => o.type === 'pon') || options[0];
+          this.call(this.players[i], option.type, option.tiles);
+        }
+        return true;
       } else {
         const p = this.players[this.turn];
-        if (this.isWinning(this.turn, p.hand)) this.win(p, 'tsumo');
+        if (this.drawn && this.isWinning(this.turn, p.hand)) this.win(p, 'tsumo');
         else this.discard(p, chooseDiscard(p.hand, this.rules));
         return true;
       }
@@ -193,7 +277,7 @@ export class Room {
   }
   npcDeadline() {
     if (this.status !== 'playing' || this.pending) return Infinity;
-    const eligible = this.claim ? this.players.some((p, i) => p.npc && this.canRon(i, true)) : this.players[this.turn]?.npc;
+    const eligible = this.claim ? this.players.some((p, i) => p.npc && (this.canRon(i, true) || this.callOptions(i).length)) : this.players[this.turn]?.npc;
     return eligible ? this.npc_deadline : Infinity;
   }
   action(action, p, data) {
@@ -212,13 +296,14 @@ export class Room {
         this.players.splice(data.seat, 1); break;
       case 'ready': require(this.status === 'lobby', '準備を変更できません。'); p.ready = !p.ready; this.event('system', `${p.name}：${p.ready ? '準備完了！' : '準備中'}`); break;
       case 'start': this.start(p); break;
+      case 'call': this.call(p, data.type, data.tiles); break;
       case 'discard': this.discard(p, data.tile); break;
       case 'tsumo': case 'ron': this.win(p, action); break;
       case 'pass': {
         const i = this.players.indexOf(p);
-        require(this.status === 'playing' && !this.pending && this.canRon(i), '見送るロンがありません。');
+        require(this.status === 'playing' && !this.pending && (this.canRon(i) || this.callOptions(i).length), '見送るロン・鳴きがありません。');
         this.claim.passed.push(i); this.version++;
-        if (!this.players.some((_, j) => this.canRon(j))) this.advance(); break;
+        this.resolveClaim(); break;
       }
       case 'reset_rules':
         require(p === this.players[0] && this.status !== 'playing' && !this.pending, '部屋主が局の合間にリセットできます。');
@@ -239,9 +324,11 @@ export class Room {
   programContext(i, extra = {}) {
     const p = this.players[i];
     return {actor: i, turn: this.turn, round: this.round, wall: this.wall.length, text: '', tile: '',
+      meld_count: (p.melds || []).length, melds: (p.melds || []).flatMap(m => m.tiles),
+      call_type: '', source: -1, points: 0, loser: -1, method: '',
       score: p.score, min_score: Math.min(...this.players.map(q => q.score)), max_score: Math.max(...this.players.map(q => q.score)),
       discard_count: this.players.reduce((n, q) => n + q.river.length, 0), hand_count: (extra.hand || p.hand).length,
-      hand: [...p.hand], river: [...p.river], discards: this.players.flatMap(q => q.river), ...extra};
+      hand: [...(extra.hand || p.hand)], river: [...p.river], discards: this.players.flatMap(q => q.river), ...extra};
   }
   programEffects(event, i, extra = {}, readOnly = false) {
     const context = this.programContext(i, extra), effects = [];
@@ -262,7 +349,7 @@ export class Room {
     return effects;
   }
   isWinning(i, hand, tile = '', readOnly = false) {
-    return winning(hand, this.rules) || (hand.length === 14 && hand.every(t => TILES.includes(t)) &&
+    return winning(hand, this.rules, this.players[i].melds || []) || (hand.length === 14 - (this.players[i].melds || []).length * 3 && hand.every(t => TILES.includes(t)) &&
       this.programEffects('win_check', i, {hand, tile}, readOnly).some(e => e.win));
   }
   applyPrograms(event, i, extra = {}) {
@@ -301,13 +388,14 @@ export class Room {
   speechEffects(p, text) {
     if (this.status !== 'playing') return;
     const i = this.players.indexOf(p);
+    this.applyPrograms('before_speech', i, {text});
     if (this.rules.speech_keyword && text.includes(this.rules.speech_keyword)) {
       if (this.rules.speech_effect === 'win') { this.finish(i, null, p.hand, '合言葉あがり'); return; }
       const points = this.rules.speech_points;
       this.players.forEach((q, j) => { q.score += points * (j === i ? 3 : -1); });
       this.event('system', `合言葉「${this.rules.speech_keyword}」発動！ ${p.name} が各員から${points.toLocaleString('en-US')}点ずつ獲得。`);
     }
-    this.applyPrograms('speech', i, {text});
+    this.applyPrograms('after_speech', i, {text});
   }
   snapshot(p, connected) {
     const i = this.players.indexOf(p), active = this.status === 'playing' && !this.pending;
@@ -315,10 +403,11 @@ export class Room {
       round: this.round, wall: this.wall.length, turn: this.turn, rules: this.rules,
       programs: this.programs.map(({id, title, explanation, code, disabled}) => ({id, title, explanation, code, disabled})),
       players: this.players.map(q => ({name: q.name, score: q.score, ready: q.ready, npc: Boolean(q.npc),
-        online: Boolean(q.npc) || (connected ? connected.has(q.token) : now() - q.seen < 15), count: q.hand.length, river: q.river})),
+        online: Boolean(q.npc) || (connected ? connected.has(q.token) : now() - q.seen < 15), count: q.hand.length, river: q.river, melds: q.melds || []})),
       hand: p.hand, messages: this.messages, history: this.history.slice(-30), pending: this.pending,
       ai_calls: this.ai_calls, result: this.result, claim: this.claim ? {tile: this.claim.tile, from: this.claim.from, deadline: this.claim.deadline} : null,
       deadline: this.claim?.deadline ?? this.deadline, server_time: now(), can_discard: active && !this.claim && i === this.turn,
-      can_tsumo: active && !this.claim && i === this.turn && this.isWinning(i, p.hand, '', true), can_ron: active && this.canRon(i, true)});
+      call_options: active ? this.callOptions(i) : [], call_pending: Boolean(this.claim?.requests?.some(r => r.seat === i)),
+      can_tsumo: active && this.drawn && !this.claim && i === this.turn && this.isWinning(i, p.hand, '', true), can_ron: active && this.canRon(i, true)});
   }
 }
