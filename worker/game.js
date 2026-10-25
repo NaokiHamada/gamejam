@@ -36,7 +36,7 @@ export class Room {
   constructor(code) {
     Object.assign(this, {code, players: [], status: 'lobby', rules: {...DEFAULT_RULES}, history: [], messages: [], programs: [],
       direction: 1, turn_seconds: 45, pending: false, ai_calls: 0, round: 0, version: 0, wall: [], turn: 0, claim: null, deadline: 0, drawn: false,
-      result: null, created: now(), touched: now(), pending_job: null, npc_deadline: 0});
+      result: null, created: now(), touched: now(), pending_job: null, npc_deadline: 0, recent_events: []});
   }
   static restore(data) {
     const room = Object.assign(new Room(data.code), {drawn: data.status === 'playing' && !data.claim}, data);
@@ -68,7 +68,7 @@ export class Room {
     require(this.status === 'lobby' || this.status === 'finished', 'すでに対局中です。');
     require(!this.pending, 'AIの判定を待ってください。');
     require(this.players.length === 4 && this.players.every(q => q.ready), '4人全員の準備完了を待ってください。');
-    this.round++; this.status = 'playing'; this.result = this.claim = null;
+    this.round++; this.status = 'playing'; this.result = this.claim = null; this.recent_events = [];
     this.wall = Array.from({length: 4}, () => TILES).flat();
     for (let i = this.wall.length - 1; i > 0; i--) { const j = randomInt(i + 1); [this.wall[i], this.wall[j]] = [this.wall[j], this.wall[i]]; }
     this.turn = (this.round - 1) % 4;
@@ -289,12 +289,12 @@ export class Room {
       discard_count: this.players.reduce((n, q) => n + q.river.length, 0), hand_count: (extra.hand || p.hand).length,
       hand: [...(extra.hand || p.hand)], hand_melds: structuredClone(p.melds || []), river: [...p.river], discards: this.players.flatMap(q => q.river), ...extra};
   }
-  programEffects(event, i, extra = {}, readOnly = false) {
+  programEffects(event, i, extra = {}, readOnly = false, programs = this.programs) {
     const context = this.programContext(i, extra), effects = [];
     // Later seats must still receive their normal 13-tile deal.
     context.wall_reserve = event === 'after_deal' ? (this.players.length - i - 1) * 13 : 0;
     let tileState = {hands: context.hands, rivers: context.rivers, melds: context.all_melds, wall: context.wall_tiles};
-    for (const program of this.programs) {
+    for (const program of programs) {
       if (program.disabled) continue;
       try {
         const effect = execute(compile(program.code), event, context, program.memory[i], tileState);
@@ -321,9 +321,13 @@ export class Room {
     }
     return allowed;
   }
-  applyPrograms(event, i, extra = {}) {
+  applyPrograms(event, i, extra = {}, programs = this.programs, replay = false) {
     if (this.status !== 'playing') return;
-    const effects = this.programEffects(event, i, extra);
+    if (!replay && /^(before|after)_(draw|discard|call|turn)$/.test(event)) {
+      this.recent_events.push({event, seat: i, extra: structuredClone(extra)});
+      this.recent_events = this.recent_events.slice(-4);
+    }
+    const effects = this.programEffects(event, i, extra, false, programs);
     let cancelledClaim = false;
     for (const effect of effects) {
       if (effect.tiles) {
@@ -350,6 +354,19 @@ export class Room {
     }
     if (effects.some(e => e.win)) this.finish(i, null, this.players[i].hand, '生成ルールあがり');
     else if (cancelledClaim) this.advance();
+  }
+  applyAdoptedProgram(program) {
+    // Revisit at most two recent steps. Only the new code runs: normal draws,
+    // discards, payments and pre-existing programs must never run twice.
+    const events = [...this.recent_events];
+    for (const {event, seat, extra} of events) {
+      if (this.status !== 'playing') break;
+      const turn = this.turn, claim = this.claim;
+      this.applyPrograms(event, seat, extra, [program], true);
+      // Tile edits during a claim can advance play. Later historical events
+      // no longer describe that position; normal hooks handle the new step.
+      if (this.turn !== turn || this.claim !== claim) break;
+    }
   }
   chonbo(i, violation, points, explanation) {
     this.players.forEach((p, j) => { p.score += j === i ? -points : points / 3; });
