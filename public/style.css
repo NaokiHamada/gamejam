@@ -7,3 +7,7 @@
 @media(max-width:580px){.hero-tiles{position:relative;top:auto;right:auto;width:330px;height:105px;transform:scale(.6);transform-origin:top left;margin:20px 0 -35px 35px}}
 
 .message.chonbo{padding:12px;border:2px solid var(--red);color:var(--red);background:#f8eae5;border-radius:5px}.generated-rule{grid-column:1/-1;padding:8px 0;min-width:0}.generated-rule summary{padding:7px 0}.generated-rule p{font-size:11px;line-height:1.8}.generated-rule pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:10px;max-height:200px;overflow:auto;background:#eeeee2;padding:10px;border-radius:4px}
+
+.melds,.call-options{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}.meld{display:inline-flex;gap:2px}.opponent .melds{justify-content:center}.call-options .button{font-size:13px}.hand-actions .action-buttons{flex-wrap:wrap}
+.opponent .melds{gap:4px}.opponent .meld{gap:1px}.opponent .meld .tile.small{width:17px;height:25px}.opponent .meld .tile.small .number{font-size:12px}.opponent .meld .tile.small .suit{font-size:6px}.opponent.top .melds{position:absolute;left:calc(100% + 4px);top:0;width:74px;margin-top:0}
+@media(max-width:580px){.opponent .meld .tile.small{width:12px;height:19px;border-bottom-width:2px}.opponent .meld .tile.small .number{font-size:9px}.opponent .meld .tile.small .suit{font-size:5px;margin-top:1px}.opponent.top .melds{width:52px}.call-options .button{font-size:11px;padding:9px 10px}}

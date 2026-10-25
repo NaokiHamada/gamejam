@@ -13,7 +13,8 @@
     "check": "node --check worker/index.js && node --check worker/game.js && node --check worker/npc.js && node --check worker/referee.js && node --check worker/rule-program.js && node --check public/app.js",
     "build": "wrangler deploy --dry-run --outdir dist",
     "smoke": "node scripts/smoke.mjs",
-    "smoke:npc": "node scripts/npc-smoke.mjs"
+    "smoke:npc": "node scripts/npc-smoke.mjs",
+    "smoke:calls": "node scripts/calls-smoke.mjs"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.4.7",

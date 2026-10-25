@@ -56,6 +56,36 @@ beforeEach(async () => {await reset();});
 afterEach(async () => {for (const socket of sockets.splice(0)) socket.close(1000);vi.unstubAllGlobals();await reset();});
 
 describe('WorkersとSQLite Durable Objects', () => {
+  it('鳴き申請をSQLiteから復元し、見送り後に確定してWebSocketへ副露とフック結果を配信する', async () => {
+    const clients = await started(), host = clients[0];
+    await seed(host.code, room => {
+      room.players.forEach(p => {p.hand = '1m 3m 5m 7m 9m 1p 3p 5p 7p 9p 1s 3s 5s'.split(' '); p.river = [];});
+      room.players[0].river = ['5z'];
+      room.players[1].hand.splice(0, 2, '5z', '5z');
+      room.players[2].hand = '1m 2m 3m 4m 5m 6m 2p 3p 4p 7s 8s 9s 5z'.split(' ');
+      room.claim = {tile: '5z', from: 0, passed: [], requests: [], deadline: Date.now() / 1000 + 60};
+      room.programs = [{id: 'call', title: '鳴き加点', code: JSON.stringify([{on: 'after_call', when: true, do: [['award', 100]]}]), memory: [{}, {}, {}, {}]}];
+    });
+    expect((await action('call', {...clients[1], token: 'invalid'}, {type: 'pon', tiles: ['5z', '5z']})).status).toBe(403);
+    const request = await action('call', clients[1], {type: 'pon', tiles: ['5z', '5z']});
+    expect(request.status).toBe(200); expect(request.state.call_pending).toBe(true);
+    expect(request.state.players[1].melds).toEqual([]);
+    await evictDurableObject(stubFor(host.code));
+    expect((await state(clients[1])).state.call_pending).toBe(true);
+    const socket = await ws(host);
+    await message(socket); // Initial snapshot on connection.
+    const received = message(socket);
+    expect((await action('pass', clients[2])).status).toBe(200);
+    const view = JSON.parse(await received).state;
+    expect(view.turn).toBe(1); expect(view.claim).toBe(null);
+    expect(view.players[1].melds[0]).toMatchObject({type: 'pon', tiles: ['5z', '5z', '5z'], from: 0});
+    expect(view.players[1].score).toBe(25300);
+    expect(view.players.every(p => !('hand' in p) && !('token' in p))).toBe(true);
+    await evictDurableObject(stubFor(host.code));
+    const restored = (await state(clients[1])).state;
+    expect(restored.players[1].melds).toEqual(view.players[1].melds);
+    expect(restored.can_discard).toBe(true); expect(restored.can_tsumo).toBe(false);
+  });
   it('NPCの操作をSQLite復元後にアラームで進め、WebSocketへ通知し、AI待ちでは停止する', async () => {
     const host = await create();
     expect((await action('add_npc', {...host, token: 'invalid'})).status).toBe(403);

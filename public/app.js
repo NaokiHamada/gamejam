@@ -66,19 +66,22 @@ function render(s) {
   $('game-code').textContent=s.code;
   $('wall-count').textContent=s.wall;
   $('direction').textContent=s.rules.reverse_order?'↺ 逆回り':'↻ 通常';
-  $('turn-text').textContent=s.status==='finished'?'対局終了':s.pending?'✦ AI審判が考え中…':s.claim?'ロン受付中':s.turn===s.me?'あなたの番です':s.players[s.turn].name+' の番';
+  $('turn-text').textContent=s.status==='finished'?'対局終了':s.pending?'✦ AI審判が考え中…':s.claim?'ロン・鳴き受付中':s.turn===s.me?'あなたの番です':s.players[s.turn].name+' の番';
   $('my-table-label').innerHTML=`${s.turn===s.me&&s.status==='playing'?'<strong>▼ あなたの番</strong>':'▼ あなた'} · ${esc(s.players[s.me].name)}`;
   for(const [offset,id] of [[1,'opponent-right'],[2,'opponent-top'],[3,'opponent-left']]) {
     const i=(s.me+offset)%4,p=s.players[i];
     $(id).classList.toggle('is-turn',i===s.turn&&s.status==='playing');
-    $(id).innerHTML=`<div class="opponent-info"><span class="wind-badge">${winds[i]}</span><span>${esc(p.name)}</span></div><div class="opponent-score">${p.score.toLocaleString()} <small>点</small></div><div class="backs" aria-label="手牌 ${p.count}枚">${'<span class="back"></span>'.repeat(p.count)}</div>${!p.online?'<span class="offline-tag">接続待ち</span>':''}`;
+    $(id).innerHTML=`<div class="opponent-info"><span class="wind-badge">${winds[i]}</span><span>${esc(p.name)}</span></div><div class="opponent-score">${p.score.toLocaleString()} <small>点</small></div><div class="backs" aria-label="手牌 ${p.count}枚">${'<span class="back"></span>'.repeat(p.count)}</div>${(p.melds||[]).length?`<div class="melds">${p.melds.map(m=>`<span class="meld">${m.tiles.map(t=>tileHTML(t,true)).join('')}</span>`).join('')}</div>`:''}${!p.online?'<span class="offline-tag">接続待ち</span>':''}`;
   }
   $('rivers').innerHTML=[['bottom',0],['right',1],['top',2],['left',3]].map(([pos,offset])=>`<div class="river river-${pos}" aria-label="${esc(s.players[(s.me+offset)%4].name)} の捨て牌">${s.players[(s.me+offset)%4].river.slice(-24).map(t=>tileHTML(t,true)).join('')}</div>`).join('');
   $('my-info').innerHTML=`<span class="wind-badge">${winds[s.me]}</span> <strong>${esc(s.players[s.me].name)}</strong><span class="score">${s.players[s.me].score.toLocaleString()} 点</span>`;
+  $('my-melds').innerHTML=(s.players[s.me].melds||[]).map(m=>`<span class="meld" aria-label="${{chi:'チー',pon:'ポン',kan:'カン'}[m.type]}">${m.tiles.map(t=>tileHTML(t,true)).join('')}</span>`).join('');
+  $('call-options').innerHTML=(s.call_options||[]).map((o,i)=>`<button class="button quiet" data-call="${i}">${{chi:'チー',pon:'ポン',kan:'カン'}[o.type]} ${o.tiles.map(tileName).join('・')}</button>`).join('');
+  $('call-options').querySelectorAll('[data-call]').forEach(b=>b.addEventListener('click',()=>{const o=state.call_options[Number(b.dataset.call)];action('call',{type:o.type,tiles:o.tiles});}));
   renderHand();
   $('hand-hint').textContent=s.pending?'AI判定中・時計停止':s.can_discard?'牌を選んで、打牌。':'あなたの手牌';
-  $('action-help').textContent=s.pending?'ルール判定が終わるまで一時停止中':s.can_ron?'8秒以内にロンを宣言！':s.can_tsumo?'今のルールであがれます！':s.status==='finished'?'ルール・持ち点は次の局へ引き継ぎます。':'自由に発言して、対局をひっくり返そう。';
-  $('tsumo').hidden=!s.can_tsumo; $('ron').hidden=!s.can_ron; $('pass').hidden=!s.can_ron;
+  $('action-help').textContent=s.pending?'ルール判定が終わるまで一時停止中':s.call_pending?'鳴きを申請しました。ほかの人の応答を待っています。':s.can_ron?'8秒以内にロンを宣言！':s.call_options?.length?'8秒以内に鳴くか、見送ってください。':s.can_tsumo?'今のルールであがれます！':s.status==='finished'?'ルール・持ち点は次の局へ引き継ぎます。':'自由に発言して、対局をひっくり返そう。';
+  $('tsumo').hidden=!s.can_tsumo; $('ron').hidden=!s.can_ron; $('pass').hidden=!s.can_ron&&!s.call_options?.length;
   $('discard').hidden=s.status==='finished';
   $('judge-status').textContent=s.pending?'✦ 判定中・時計停止':'AI審判 待機中';
   $('judge-status').classList.toggle('thinking',s.pending);
@@ -143,7 +146,7 @@ function renderLobby(s) {
 function renderTimer() {
   if(!state||state.status!=='playing') return;
   const remaining=Math.max(0,Math.ceil((state.deadline*1000-Date.now()-clockOffset)/1000));
-  $('timer').textContent=state.pending?'判定中は時計が止まります':state.claim?`ロン受付 あと ${remaining} 秒`:`打牌まで ${remaining} 秒`;
+  $('timer').textContent=state.pending?'判定中は時計が止まります':state.claim?`ロン・鳴き受付 あと ${remaining} 秒`:`打牌まで ${remaining} 秒`;
   $('timer').classList.toggle('urgent',!state.pending&&remaining<=8);
 }
 async function copyInvite() {
