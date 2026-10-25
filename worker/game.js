@@ -1,3 +1,4 @@
+import {compile, execute} from './rule-program.js';
 // Pure game rules. No platform APIs beyond Web Crypto; all state is serializable.
 export const TILES = [...'mps'].flatMap(s => Array.from({length: 9}, (_, i) => `${i + 1}${s}`))
   .concat(Array.from({length: 7}, (_, i) => `${i + 1}z`));
@@ -84,7 +85,7 @@ export function validateRules(rules) {
 
 export class Room {
   constructor(code) {
-    Object.assign(this, {code, players: [], status: 'lobby', rules: {...DEFAULT_RULES}, history: [], messages: [],
+    Object.assign(this, {code, players: [], status: 'lobby', rules: {...DEFAULT_RULES}, history: [], messages: [], programs: [],
       pending: false, ai_calls: 0, round: 0, version: 0, wall: [], turn: 0, claim: null, deadline: 0,
       result: null, created: now(), touched: now(), pending_job: null});
   }
@@ -127,11 +128,13 @@ export class Room {
       this.result = {winner: null, text: '流局。山牌がなくなりました。', deltas: [0, 0, 0, 0], hand: []};
       this.event('result', this.result.text); return;
     }
-    this.players[this.turn].hand.push(this.wall.pop()); this.deadline = now() + this.rules.turn_seconds;
+    const tile = this.wall.pop();
+    this.players[this.turn].hand.push(tile); this.deadline = now() + this.rules.turn_seconds;
+    this.applyPrograms('draw', this.turn, {tile});
   }
-  canRon(i) {
+  canRon(i, readOnly = false) {
     return Boolean(this.claim && i !== this.claim.from && !this.claim.passed.includes(i) &&
-      winning([...this.players[i].hand, this.claim.tile], this.rules));
+      this.isWinning(i, [...this.players[i].hand, this.claim.tile], this.claim.tile, readOnly));
   }
   discard(p, tile) {
     require(this.status === 'playing' && !this.pending, 'いまは打牌できません。');
@@ -140,6 +143,7 @@ export class Room {
     p.hand.splice(p.hand.indexOf(tile), 1); p.hand = sortedHand(p.hand); p.river.push(tile);
     this.claim = {tile, from: this.turn, passed: [], deadline: now() + 8};
     this.event('discard', `${p.name} が打牌。`, {tile, seat: this.turn});
+    this.applyPrograms('discard', this.turn, {tile});
     if (!this.players.some((_, i) => this.canRon(i))) this.advance();
   }
   advance() { this.claim = null; this.turn = (this.turn + (this.rules.reverse_order ? 3 : 1)) % 4; this.draw(); }
@@ -150,12 +154,13 @@ export class Room {
       require(this.canRon(i), 'ロンできる手牌ではありません。');
       this.finish(i, this.claim.from, [...p.hand, this.claim.tile], 'ロン');
     } else {
-      require(!this.claim && i === this.turn && winning(p.hand, this.rules), 'ツモあがりできる手牌ではありません。');
+      require(!this.claim && i === this.turn && this.isWinning(i, p.hand), 'ツモあがりできる手牌ではありません。');
       this.finish(i, null, p.hand, 'ツモ');
     }
   }
   finish(winner, loser, hand, label) {
-    const points = Math.min(60000, this.rules.win_points + hand.filter(t => t[1] === this.rules.bonus_suit).length * this.rules.bonus_points);
+    const bonus = this.programEffects('win_score', winner, {hand}).reduce((sum, e) => sum + e.bonus, 0);
+    const points = Math.max(1000, Math.min(60000, this.rules.win_points + hand.filter(t => t[1] === this.rules.bonus_suit).length * this.rules.bonus_points + bonus));
     const deltas = [0, 0, 0, 0];
     if (loser === null) { const share = Math.ceil(points / 300) * 100; deltas.fill(-share); deltas[winner] = share * 3; }
     else { deltas[winner] = points; deltas[loser] = -points; }
@@ -186,7 +191,7 @@ export class Room {
       }
       case 'reset_rules':
         require(p === this.players[0] && this.status !== 'playing' && !this.pending, '部屋主が局の合間にリセットできます。');
-        this.rules = {...DEFAULT_RULES};
+        this.rules = {...DEFAULT_RULES}; this.programs = [];
         this.history.push({title: '初期ルールに戻しました', explanation: '次の局から初期ルールで対戦します。', changes: {}, by: p.name});
         this.history = this.history.slice(-30); this.event('rule', '初期ルールに戻しました。'); break;
       case 'leave':
@@ -196,28 +201,89 @@ export class Room {
     }
     return {};
   }
-  speech(p, text) {
+  programContext(i, extra = {}) {
+    const p = this.players[i];
+    return {actor: i, turn: this.turn, round: this.round, wall: this.wall.length, text: '', tile: '',
+      score: p.score, min_score: Math.min(...this.players.map(q => q.score)), max_score: Math.max(...this.players.map(q => q.score)),
+      discard_count: this.players.reduce((n, q) => n + q.river.length, 0), hand_count: (extra.hand || p.hand).length,
+      hand: [...p.hand], river: [...p.river], discards: this.players.flatMap(q => q.river), ...extra};
+  }
+  programEffects(event, i, extra = {}, readOnly = false) {
+    const context = this.programContext(i, extra), effects = [];
+    for (const program of this.programs) {
+      if (program.disabled) continue;
+      try {
+        const effect = execute(compile(program.code), event, context, program.memory[i]);
+        effects.push(effect);
+        if (!readOnly) program.memory[i] = effect.memory;
+      } catch {
+        // A model's code bug is never a player's chonbo. Fail closed and continue play.
+        if (!readOnly) {
+          program.disabled = true;
+          this.event('error', `生成ルール「${program.title}」を停止しました。実行上限または計算エラーです。減点はありません。`);
+        }
+      }
+    }
+    return effects;
+  }
+  isWinning(i, hand, tile = '', readOnly = false) {
+    return winning(hand, this.rules) || (hand.length === 14 && hand.every(t => TILES.includes(t)) &&
+      this.programEffects('win_check', i, {hand, tile}, readOnly).some(e => e.win));
+  }
+  applyPrograms(event, i, extra = {}) {
+    if (this.status !== 'playing') return;
+    const effects = this.programEffects(event, i, extra);
+    for (const effect of effects) {
+      if (effect.award) {
+        this.players.forEach((p, j) => { p.score += effect.award * (i === j ? 3 : -1); });
+        this.event('system', `生成ルール発動：${this.players[i].name} ${effect.award > 0 ? 'が各員から' : 'が各員へ'}${Math.abs(effect.award)}点${effect.award > 0 ? '獲得' : '支払い'}。`);
+      }
+      if (effect.reverse) this.rules.reverse_order = !this.rules.reverse_order;
+      if (effect.seconds !== null) {
+        this.rules.turn_seconds = effect.seconds;
+        if (!this.claim) {
+          if (this.pending && this.pending_job) this.pending_job.reset_deadline = true;
+          else this.deadline = now() + effect.seconds;
+        }
+      }
+    }
+    if (effects.some(e => e.win)) this.finish(i, null, this.players[i].hand, '生成ルールあがり');
+  }
+  chonbo(i, violation, points, explanation) {
+    this.players.forEach((p, j) => { p.score += j === i ? -points : points / 3; });
+    const deltas = this.players.map((_, j) => j === i ? -points : points / 3);
+    this.event('chonbo', `${this.players[i].name}：−${points.toLocaleString('en-US')}点。${explanation}`, {seat: i, violation, points, deltas, title: 'チョンボ！'});
+    this.history.push({title: 'チョンボ！', explanation, changes: {}, by: this.players[i].name, violation, points});
+    this.history = this.history.slice(-30);
+  }
+  speech(p, text, defer = false) {
     p.last_speech = now();
     this.event('speech', text, {seat: this.players.indexOf(p), name: p.name});
     if (this.status !== 'playing') return false;
+    if (!defer) this.speechEffects(p, text);
+    return this.status === 'playing';
+  }
+  speechEffects(p, text) {
+    if (this.status !== 'playing') return;
+    const i = this.players.indexOf(p);
     if (this.rules.speech_keyword && text.includes(this.rules.speech_keyword)) {
-      const i = this.players.indexOf(p);
-      if (this.rules.speech_effect === 'win') { this.finish(i, null, p.hand, '合言葉あがり'); return false; }
+      if (this.rules.speech_effect === 'win') { this.finish(i, null, p.hand, '合言葉あがり'); return; }
       const points = this.rules.speech_points;
       this.players.forEach((q, j) => { q.score += points * (j === i ? 3 : -1); });
       this.event('system', `合言葉「${this.rules.speech_keyword}」発動！ ${p.name} が各員から${points.toLocaleString('en-US')}点ずつ獲得。`);
     }
-    return true;
+    this.applyPrograms('speech', i, {text});
   }
   snapshot(p, connected) {
     const i = this.players.indexOf(p), active = this.status === 'playing' && !this.pending;
     return structuredClone({code: this.code, me: i, host: i === 0, status: this.status, version: this.version,
       round: this.round, wall: this.wall.length, turn: this.turn, rules: this.rules,
+      programs: this.programs.map(({id, title, explanation, code, disabled}) => ({id, title, explanation, code, disabled})),
       players: this.players.map(q => ({name: q.name, score: q.score, ready: q.ready,
         online: connected ? connected.has(q.token) : now() - q.seen < 15, count: q.hand.length, river: q.river})),
       hand: p.hand, messages: this.messages, history: this.history.slice(-30), pending: this.pending,
       ai_calls: this.ai_calls, result: this.result, claim: this.claim ? {tile: this.claim.tile, from: this.claim.from, deadline: this.claim.deadline} : null,
       deadline: this.claim?.deadline ?? this.deadline, server_time: now(), can_discard: active && !this.claim && i === this.turn,
-      can_tsumo: active && !this.claim && i === this.turn && winning(p.hand, this.rules), can_ron: active && this.canRon(i)});
+      can_tsumo: active && !this.claim && i === this.turn && this.isWinning(i, p.hand, '', true), can_ron: active && this.canRon(i, true)});
   }
 }
