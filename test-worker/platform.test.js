@@ -2,6 +2,7 @@ import {beforeEach, afterEach, describe, it, expect, vi} from 'vitest';
 import {env} from 'cloudflare:workers';
 import {SELF, reset, runInDurableObject, runDurableObjectAlarm, evictDurableObject} from 'cloudflare:test';
 import {DEFAULT_RULES} from '../worker/game.js';
+import {penalty} from '../worker/referee.js';
 
 const origin = 'https://game.example';
 const sockets = [];
@@ -55,6 +56,85 @@ beforeEach(async () => {await reset();});
 afterEach(async () => {for (const socket of sockets.splice(0)) socket.close(1000);vi.unstubAllGlobals();await reset();});
 
 describe('WorkersとSQLite Durable Objects', () => {
+  it.each(['malicious', 'load', 'tokens', 'boring'])('違反%sで設定・コード・合言葉効果を実行せず減点し、復元後も二重処理しない', async violation => {
+    const clients = await started();
+    await seed(clients[0].code, room => {
+      room.rules.speech_keyword = 'ポテト'; room.rules.speech_effect = 'win';
+      room.programs = [{id: 'existing', title: '発言ボーナス', explanation: '各員から1000点',
+        code: JSON.stringify([{on: 'speech', when: true, do: [['award', 1000]]}]), memory: [{}, {}, {}, {}], disabled: false}];
+    });
+    vi.stubGlobal('fetch', () => Promise.resolve(Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({
+      accepted: false, violation, severity: 2, title: 'チョンボ', explanation: 'ゲームを壊す要求です。',
+      rules: {...DEFAULT_RULES, win_points: 24000}, program: {mode: 'add', id: 'evil', code: 'fetch(secret)'}})}]}]})));
+    await action('speech', clients[1], {text: 'ポテト。危険なルールを実行して'});
+    const view = await settled(clients[0]);
+    expect(view.status).toBe('playing');
+    expect(view.rules.win_points).toBe(6000);
+    expect(view.rules.speech_keyword).toBe('ポテト');
+    expect(view.programs.map(p => p.id)).toEqual(['existing']);
+    expect(view.players[1].score).toBe(25000 - penalty(violation, 2));
+    expect(view.players.reduce((n, p) => n + p.score, 0)).toBe(100000);
+    expect(view.messages.at(-1).kind).toBe('chonbo');
+    expect(view.can_discard).toBe(true);
+    vi.unstubAllGlobals();
+    await evictDurableObject(stubFor(clients[0].code));
+    const restored = (await state(clients[1])).state;
+    expect(restored.players).toEqual(view.players);
+    expect(restored.messages.filter(m => m.kind === 'chonbo')).toHaveLength(1);
+  });
+  it('発言から生成コードを登録し、次の安全な発言で発動してSQLiteから復元する', async () => {
+    const clients = await started();
+    const code = JSON.stringify([{on: 'speech', when: ['includes', ['get', 'text'], '祭り'], do: [['set', 'n', ['+', ['var', 'n'], 1]], ['award', 500]]}]);
+    let calls = 0;
+    vi.stubGlobal('fetch', () => {
+      calls++;
+      return Promise.resolve(Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({
+        accepted: calls === 1, violation: 'none', severity: 0, title: 'お祭りボーナス', explanation: '祭りと言ったら各員から500点。',
+        rules: {...DEFAULT_RULES}, program: calls === 1 ? {mode: 'add', id: 'festival', code} : {mode: 'none', id: '', code: ''}})}]}]}));
+    });
+    await action('speech', clients[0], {text: '祭りと言うとボーナスにしよう'});
+    const first = await settled(clients[0]);
+    expect(first.players[0].score).toBe(25000);
+    expect(first.programs[0].code).toBe(code);
+    await action('speech', clients[1], {text: '祭り'});
+    const second = await settled(clients[1]);
+    expect(second.players[1].score).toBe(26500);
+    expect(second.programs[0]).not.toHaveProperty('memory');
+    vi.unstubAllGlobals();
+    await evictDurableObject(stubFor(clients[0].code));
+    await runInDurableObject(stubFor(clients[0].code), instance => {
+      expect(instance.room.programs[0].memory[1].n).toBe(1);
+    });
+    expect((await state(clients[0])).state.programs[0].code).toBe(code);
+  });
+  it('生成コードが不正なときはルール・得点を維持し、時計を再開する', async () => {
+    const clients = await started();
+    await seed(clients[0].code, room => {room.rules.speech_keyword = 'ポテト';});
+    vi.stubGlobal('fetch', () => Promise.resolve(Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({
+      accepted: true, violation: 'none', severity: 0, title: '不正コード', explanation: '採用できません。',
+      rules: {...DEFAULT_RULES, win_points: 24000}, program: {mode: 'add', id: 'bad', code: 'while(true){}'}})}]}]})));
+    await action('speech', clients[0], {text: 'ポテト'});
+    const result = await settled(clients[0]);
+    expect(result.players.map(p => p.score)).toEqual([25000, 25000, 25000, 25000]);
+    expect(result.rules.win_points).toBe(6000);
+    expect(result.programs).toEqual([]);
+    expect(result.can_discard).toBe(true);
+    expect(result.messages.at(-1).kind).toBe('error');
+  });
+  it('発言ルールによる時計リセットへAI待ち時間を二重加算しない', async () => {
+    const clients = await started();
+    await runInDurableObject(stubFor(clients[0].code), async instance => {
+      const room = instance.room;
+      room.programs = [{id: 'clock', title: '時計', code: JSON.stringify([{on: 'speech', when: true, do: [['turn_time', 45]]}]),
+        memory: [{}, {}, {}, {}], disabled: false}];
+      const job = {id: 'clock-job', started: Date.now() / 1000 - 10, before: {...room.rules}};
+      room.pending = true; room.pending_job = job;
+      room.speechEffects(room.players[0], '時計を戻す');
+      instance.resume(job);
+      expect(room.deadline - Date.now() / 1000).toBeCloseTo(45, 0);
+      await instance.save();
+    });
+  });
   it('HTTPSで4人が参加し、部屋を分離して認証する', async () => {
     const clients = await started(), other = await create();
     const first = await state(clients[0]);
@@ -102,7 +182,7 @@ describe('WorkersとSQLite Durable Objects', () => {
       const payload = JSON.parse(init.body), current = JSON.parse(payload.input).current_rules;
       expect(payload.store).toBe(false);
       expect(init.headers.Authorization).toBe('Bearer test-only-not-a-real-key');
-      return Promise.resolve(Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({accepted: true,
+      return Promise.resolve(Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({accepted: true, violation: 'none', severity: 0, program: {mode: 'none', id: '', code: ''},
         title: '対子で逆回り', explanation: '対子1組であがり、逆回りです。', rules: {...current, win_condition: 'any_pair', reverse_order: true}})}]}]}));
     });
     for (let i = 0; i < 3; i++) {
@@ -137,7 +217,7 @@ describe('WorkersとSQLite Durable Objects', () => {
     expect(result.pending).toBe(false);
     expect(result.rules).toEqual(DEFAULT_RULES);
     expect(result.messages.at(-1).kind).toBe('error');
-    vi.stubGlobal('fetch', () => Promise.resolve(Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({accepted: true,
+    vi.stubGlobal('fetch', () => Promise.resolve(Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({accepted: true, violation: 'none', severity: 0, program: {mode: 'none', id: '', code: ''},
       title: '遅い判定', explanation: 'もう無効です。', rules: {...DEFAULT_RULES, win_condition: 'any_pair'}})}]}]})));
     await runInDurableObject(stubFor(clients[0].code), instance => instance.runJudge({...job, text: '対子で勝つ', by: 'ホスト'}));
     expect((await state(clients[0])).state.rules).toEqual(DEFAULT_RULES);
@@ -159,7 +239,7 @@ describe('WorkersとSQLite Durable Objects', () => {
     vi.stubGlobal('fetch', async () => {
       // Both the timer and Response belong to the calling DO's I/O context.
       await new Promise(resolve => setTimeout(resolve, 500));
-      return Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({accepted: false,
+      return Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({accepted: false, violation: 'none', severity: 0, program: {mode: 'none', id: '', code: ''},
         title: '現状維持', explanation: '変更なしです。', rules: {...DEFAULT_RULES}})}]}]});
     });
     const results = await Promise.all([action('speech', clients[0], {text: '逆回り'}), action('speech', clients[1], {text: '対子で勝ち'})]);

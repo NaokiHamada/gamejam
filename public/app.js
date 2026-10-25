@@ -87,22 +87,24 @@ function render(s) {
   $('speech').placeholder=s.pending?'審判がルールを検討しています…':s.status==='finished'?'感想をどうぞ。次の局でルール変更できます。':'「今から白はジョーカーでしょ！」';
   document.querySelectorAll('[data-say]').forEach(b=>{b.disabled=s.pending||s.status!=='playing';});
   $('reset-rules').hidden=!s.host||s.status==='playing';
-  const latest=s.history.at(-1);
+  const latest=s.history.findLast(h=>!h.violation);
   $('rule-banner-text').textContent=latest?latest.title:'まだ世界は、普通の麻雀。';
   $('rule-version').textContent='RULE '+String(s.history.length).padStart(2,'0');
   const r=s.rules;
   const keys=['win_condition','seven_pairs','joker','win_points','reverse_order','turn_seconds'];
   if(r.bonus_suit!=='none') keys.push('bonus_suit','bonus_points');
   if(r.speech_keyword) keys.push('speech_keyword','speech_effect',...(r.speech_effect==='bonus'?['speech_points']:[]));
+  const openPrograms=new Set([...document.querySelectorAll('.generated-rule[open]')].map(el=>el.dataset.programId));
   $('current-rules').innerHTML=keys.map(key=>`<div class="rule-row${latest?.changes?.[key]?' changed':''}"><span>${fieldNames[key]}</span><strong>${esc(valueLabel(key,r[key]))}</strong></div>`).join('');
+  $('current-rules').insertAdjacentHTML('beforeend',(s.programs||[]).map(p=>`<details class="generated-rule" data-program-id="${esc(p.id)}"${openPrograms.has(p.id)?' open':''}><summary>${esc(p.title)}${p.disabled?'（停止中）':''}</summary><p>${esc(p.explanation)}</p><pre>${esc(JSON.stringify(JSON.parse(p.code),null,2))}</pre></details>`).join(''));
   $('history-count').textContent=s.history.length;
-  $('history').innerHTML=s.history.length?[...s.history].reverse().map(h=>`<div class="history-item"><strong>${esc(h.title)}</strong><p>${esc(h.explanation)}</p>${Object.entries(h.changes).map(([key,v])=>`<p>${fieldNames[key]}：${esc(valueLabel(key,v.before))} → ${esc(valueLabel(key,v.after))}</p>`).join('')}</div>`).join(''):'<div class="history-item">まだ改変はありません。最初のひと言をどうぞ。</div>';
+  $('history').innerHTML=s.history.length?[...s.history].reverse().map(h=>`<div class="history-item"><strong>${esc(h.title)}</strong><p>${esc(h.explanation)}</p>${h.points?`<p>減点：${h.points.toLocaleString()}点</p>`:''}${h.program?`<p>生成ルール：${esc(h.program.mode)} ${esc(h.program.id)}</p>`:''}${Object.entries(h.changes).map(([key,v])=>`<p>${fieldNames[key]}：${esc(valueLabel(key,v.before))} → ${esc(valueLabel(key,v.after))}</p>`).join('')}</div>`).join(''):'<div class="history-item">まだ改変はありません。最初のひと言をどうぞ。</div>';
   if(s.version!==lastVersion) {
     const messages=$('messages'), nearBottom=messages.scrollHeight-messages.scrollTop-messages.clientHeight<70;
     messages.innerHTML=s.messages.map(m=> {
       const mine=m.seat===s.me;
       if(m.kind==='speech') return `<div class="message${mine?' mine':''}"><div class="message-name">${esc(m.name)}${mine?' · あなた':''}</div><div class="speech-bubble">${esc(m.text)}</div></div>`;
-      const isJudge=['rule','judge'].includes(m.kind);
+      const isJudge=['rule','judge','chonbo'].includes(m.kind);
       return `<div class="message ${esc(m.kind)}">${isJudge?'<div class="message-name">✦ AI審判'+(m.kind==='rule'?' · ルール改変！':'')+'</div>':''}${m.title?`<div class="message-title">${esc(m.title)}</div>`:''}${esc(m.text)}${m.tile?' '+tileName(m.tile):''}</div>`;
     }).join('');
     if(nearBottom||lastVersion<0) messages.scrollTop=messages.scrollHeight;

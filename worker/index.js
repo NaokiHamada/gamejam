@@ -1,6 +1,6 @@
 import {DurableObject} from 'cloudflare:workers';
 import {Room, GameError, require, randomInt, now} from './game.js';
-import {judge} from './referee.js';
+import {judge, penalty, updatePrograms, VIOLATIONS} from './referee.js';
 
 const ROOM_TTL = 6 * 3600;
 const AI_TIMEOUT = 40;
@@ -211,15 +211,14 @@ export class MahjongRoom extends DurableObject {
             require(!this.room.pending, 'AI審判が考え中です。少し待ってください。');
             require(now() - p.last_speech >= 4, '発言は4秒あけてください。');
             const text = data.text.trim();
-            const instantWin = this.room.rules.speech_keyword && text.includes(this.room.rules.speech_keyword) && this.room.rules.speech_effect === 'win';
-            if (this.room.status === 'playing' && !instantWin) {
+            if (this.room.status === 'playing') {
               require(this.env.OPENAI_KEY_STORE || this.env.OPENAI_API_KEY, 'AIキーが未設定です。部屋主にお知らせください。');
               require(this.room.ai_calls < 80, 'この部屋のAI判定は80回までです。');
               await reserve(this.env, 'ai');
             }
-            if (this.room.speech(p, text)) {
+            if (this.room.speech(p, text, true)) {
               this.room.pending = true; this.room.ai_calls++;
-              const job = {id: crypto.randomUUID(), started: now(), text, by: p.name, before: structuredClone(this.room.rules)};
+              const job = {id: crypto.randomUUID(), started: now(), text, seat: this.room.players.indexOf(p), by: p.name, before: structuredClone(this.room.rules), programs: structuredClone(this.room.programs)};
               this.room.pending_job = job;
               await this.publish();
               this.ctx.waitUntil(this.runJudge(job));
@@ -259,20 +258,38 @@ export class MahjongRoom extends DurableObject {
   }
   async runJudge(job) {
     let result, error;
-    try { result = await judge(job.text, job.before, this.env); }
+    try { result = await judge(job.text, job.before, this.env, job.programs || []); }
     catch (caught) { error = caught instanceof GameError ? caught.message : 'AI判定に失敗しました。'; }
     await this.serialized(async () => {
       if (this.room?.pending_job?.id !== job.id) return;
-      if (result?.accepted && JSON.stringify(result.rules) !== JSON.stringify(job.before)) {
-        const changes = Object.fromEntries(Object.entries(result.rules).filter(([key, value]) => value !== job.before[key])
-          .map(([key, value]) => [key, {before: job.before[key], after: value}]));
-        if (Object.keys(changes).length) {
-          this.room.rules = result.rules;
-          this.room.history.push({title: result.title, explanation: result.explanation, changes, by: job.by});
-          this.room.history = this.room.history.slice(-30);
-          this.room.event('rule', result.explanation, {title: result.title, changes});
-        } else this.room.event('judge', result.explanation);
-      } else this.room.event(error ? 'error' : 'judge', error || result.explanation);
+      if (result?.violation && result.violation !== 'none') {
+        this.room.chonbo(job.seat, result.violation, penalty(result.violation, result.severity),
+          `${VIOLATIONS[result.violation]}：${result.explanation}`);
+      } else if (result) {
+        // Validate the complete change before any speech effects or settings are applied.
+        let programs;
+        try { programs = updatePrograms(this.room.programs, result); }
+        catch (caught) { error = `${caught instanceof GameError ? caught.message : '生成ルールを適用できませんでした。'}既存ルールを維持します。減点はありません。`; }
+        if (!error) {
+          // Apply only pre-existing speech rules, after the safety verdict.
+          this.room.speechEffects(this.room.players[job.seat], job.text);
+          if (result.accepted) {
+            const changes = Object.fromEntries(Object.entries(result.rules).filter(([key, value]) => value !== job.before[key])
+              .map(([key, value]) => [key, {before: job.before[key], after: value}]));
+            // Preserve changes made by existing event programs unless the proposal changes that field.
+            for (const key of Object.keys(changes)) this.room.rules[key] = result.rules[key];
+            const programChanged = result.program.mode !== 'none';
+            this.room.programs = programs;
+            if (Object.keys(changes).length || programChanged) {
+              this.room.history.push({title: result.title, explanation: result.explanation, changes, by: job.by,
+                ...(programChanged ? {program: result.program} : {})});
+              this.room.history = this.room.history.slice(-30);
+              this.room.event('rule', result.explanation, {title: result.title, changes});
+            } else this.room.event('judge', result.explanation);
+          } else this.room.event('judge', result.explanation);
+        }
+      }
+      if (error) this.room.event('error', error);
       this.resume(job);
       await this.publish();
     });
@@ -280,10 +297,10 @@ export class MahjongRoom extends DurableObject {
   resume(job) {
     const elapsed = Math.max(0, now() - job.started);
     this.room.deadline += elapsed;
-    if (this.room.claim) {
+    if (this.room.status === 'playing' && this.room.claim) {
       this.room.claim.deadline += elapsed;
       if (!this.room.players.some((_, i) => this.room.canRon(i))) this.room.advance();
-    } else if (job.before.turn_seconds !== this.room.rules.turn_seconds) this.room.deadline = now() + this.room.rules.turn_seconds;
+    } else if (this.room.status === 'playing' && (job.before.turn_seconds !== this.room.rules.turn_seconds || this.room.pending_job?.reset_deadline)) this.room.deadline = now() + this.room.rules.turn_seconds;
     this.room.pending = false; this.room.pending_job = null;
   }
   async expire() {
