@@ -179,7 +179,7 @@ export class MahjongRoom extends DurableObject {
     this.ctx.storage.sql.exec('INSERT OR REPLACE INTO room_state VALUES (1, ?)', JSON.stringify(this.room));
     const times = [(this.room.touched + ROOM_TTL) * 1000];
     if (this.room.pending_job) times.push((this.room.pending_job.started + AI_TIMEOUT) * 1000);
-    else if (this.room.status === 'playing') times.push((this.room.claim?.deadline ?? this.room.deadline) * 1000);
+    else if (this.room.status === 'playing') times.push((this.room.claim?.deadline ?? this.room.deadline) * 1000, this.room.npcDeadline() * 1000);
     await this.ctx.storage.setAlarm(Math.max(Date.now() + 100, Math.min(...times)));
   }
   async publish() { await this.save(); this.broadcast(); }
@@ -297,6 +297,7 @@ export class MahjongRoom extends DurableObject {
   resume(job) {
     const elapsed = Math.max(0, now() - job.started);
     this.room.deadline += elapsed;
+    this.room.npc_deadline += elapsed;
     if (this.room.status === 'playing' && this.room.claim) {
       this.room.claim.deadline += elapsed;
       if (!this.room.players.some((_, i) => this.room.canRon(i))) this.room.advance();

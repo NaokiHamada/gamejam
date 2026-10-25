@@ -1,4 +1,5 @@
 import {compile, execute} from './rule-program.js';
+import {chooseDiscard} from './npc.js';
 // Pure game rules. No platform APIs beyond Web Crypto; all state is serializable.
 export const TILES = [...'mps'].flatMap(s => Array.from({length: 9}, (_, i) => `${i + 1}${s}`))
   .concat(Array.from({length: 7}, (_, i) => `${i + 1}z`));
@@ -87,7 +88,7 @@ export class Room {
   constructor(code) {
     Object.assign(this, {code, players: [], status: 'lobby', rules: {...DEFAULT_RULES}, history: [], messages: [], programs: [],
       pending: false, ai_calls: 0, round: 0, version: 0, wall: [], turn: 0, claim: null, deadline: 0,
-      result: null, created: now(), touched: now(), pending_job: null});
+      result: null, created: now(), touched: now(), pending_job: null, npc_deadline: 0});
   }
   static restore(data) { return Object.assign(new Room(data.code), data); }
   event(kind, text, extra = {}) {
@@ -108,7 +109,7 @@ export class Room {
     const input = new TextEncoder().encode(typeof auth === 'string' ? auth : '');
     const padded = new Uint8Array(64); padded.set(input.subarray(0, 64));
     const match = this.players.find(p => crypto.subtle.timingSafeEqual(new TextEncoder().encode(p.token), padded));
-    return input.length === 64 ? match : undefined;
+    return input.length === 64 && !match?.npc ? match : undefined;
   }
   start(p) {
     require(p === this.players[0], '部屋主だけが開始できます。');
@@ -130,6 +131,7 @@ export class Room {
     }
     const tile = this.wall.pop();
     this.players[this.turn].hand.push(tile); this.deadline = now() + this.rules.turn_seconds;
+    this.npc_deadline = now() + 1.2;
     this.applyPrograms('draw', this.turn, {tile});
   }
   canRon(i, readOnly = false) {
@@ -142,6 +144,7 @@ export class Room {
     require(typeof tile === 'string' && p.hand.includes(tile), 'その牌は手牌にありません。');
     p.hand.splice(p.hand.indexOf(tile), 1); p.hand = sortedHand(p.hand); p.river.push(tile);
     this.claim = {tile, from: this.turn, passed: [], deadline: now() + 8};
+    this.npc_deadline = now() + 1.2;
     this.event('discard', `${p.name} が打牌。`, {tile, seat: this.turn});
     this.applyPrograms('discard', this.turn, {tile});
     if (!this.players.some((_, i) => this.canRon(i))) this.advance();
@@ -172,13 +175,41 @@ export class Room {
   tick() {
     if (this.status !== 'playing' || this.pending) return false;
     if (this.claim && now() >= this.claim.deadline) { this.advance(); this.version++; return true; }
+    if (now() >= this.npcDeadline()) {
+      if (this.claim) {
+        const winner = this.players.find((p, i) => p.npc && this.canRon(i));
+        if (winner) { this.win(winner, 'ron'); return true; }
+      } else {
+        const p = this.players[this.turn];
+        if (this.isWinning(this.turn, p.hand)) this.win(p, 'tsumo');
+        else this.discard(p, chooseDiscard(p.hand, this.rules));
+        return true;
+      }
+    }
     if (!this.claim && now() >= this.deadline) {
       const p = this.players[this.turn]; this.event('system', `${p.name} は時間切れでツモ切り。`); this.discard(p, p.hand.at(-1)); return true;
     }
     return false;
   }
+  npcDeadline() {
+    if (this.status !== 'playing' || this.pending) return Infinity;
+    const eligible = this.claim ? this.players.some((p, i) => p.npc && this.canRon(i, true)) : this.players[this.turn]?.npc;
+    return eligible ? this.npc_deadline : Infinity;
+  }
   action(action, p, data) {
     switch (action) {
+      case 'add_npc': {
+        require(p === this.players[0] && this.status === 'lobby', '部屋主が開局前にNPCを追加できます。');
+        const names = ['NPC・白', 'NPC・發', 'NPC・中'];
+        const name = names.find(name => !this.players.some(q => q.npc && q.name === name));
+        const npc = this.join(name || 'NPC'); npc.npc = true; npc.ready = true;
+        break;
+      }
+      case 'remove_npc':
+        require(p === this.players[0] && this.status === 'lobby', '部屋主が開局前にNPCを外せます。');
+        require(Number.isInteger(data.seat) && this.players[data.seat]?.npc, 'NPCの席を指定してください。');
+        this.event('system', `${this.players[data.seat].name} が退席しました。`);
+        this.players.splice(data.seat, 1); break;
       case 'ready': require(this.status === 'lobby', '準備を変更できません。'); p.ready = !p.ready; this.event('system', `${p.name}：${p.ready ? '準備完了！' : '準備中'}`); break;
       case 'start': this.start(p); break;
       case 'discard': this.discard(p, data.tile); break;
@@ -196,7 +227,11 @@ export class Room {
         this.history = this.history.slice(-30); this.event('rule', '初期ルールに戻しました。'); break;
       case 'leave':
         require(this.status === 'lobby', '対局開始後は席を保持します。同じタブで復帰できます。');
-        this.players.splice(this.players.indexOf(p), 1); this.event('system', `${p.name} が退席しました。`); return {left: true};
+        this.players.splice(this.players.indexOf(p), 1);
+        // Lobby seats may move; always hand ownership to a human, or empty the room.
+        if (this.players[0]?.npc) this.players = [...this.players.filter(q => !q.npc), ...this.players.filter(q => q.npc)];
+        if (this.players.every(q => q.npc)) this.players = [];
+        this.event('system', `${p.name} が退席しました。`); return {left: true};
       default: throw new GameError('操作が見つかりません。');
     }
     return {};
@@ -279,8 +314,8 @@ export class Room {
     return structuredClone({code: this.code, me: i, host: i === 0, status: this.status, version: this.version,
       round: this.round, wall: this.wall.length, turn: this.turn, rules: this.rules,
       programs: this.programs.map(({id, title, explanation, code, disabled}) => ({id, title, explanation, code, disabled})),
-      players: this.players.map(q => ({name: q.name, score: q.score, ready: q.ready,
-        online: connected ? connected.has(q.token) : now() - q.seen < 15, count: q.hand.length, river: q.river})),
+      players: this.players.map(q => ({name: q.name, score: q.score, ready: q.ready, npc: Boolean(q.npc),
+        online: Boolean(q.npc) || (connected ? connected.has(q.token) : now() - q.seen < 15), count: q.hand.length, river: q.river})),
       hand: p.hand, messages: this.messages, history: this.history.slice(-30), pending: this.pending,
       ai_calls: this.ai_calls, result: this.result, claim: this.claim ? {tile: this.claim.tile, from: this.claim.from, deadline: this.claim.deadline} : null,
       deadline: this.claim?.deadline ?? this.deadline, server_time: now(), can_discard: active && !this.claim && i === this.turn,
