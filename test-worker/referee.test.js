@@ -23,7 +23,9 @@ it('Secrets Storeのアクセス失敗を安全なメッセージへ変換する
 it('入力・出力・トークン量を制限し、秘密やカウンタをAIに送らない', async () => {
   const request = vi.fn(async (_, init) => {
     const payload = JSON.parse(init.body);
-    expect(payload.max_output_tokens).toBe(2400);
+    expect(payload.model).toBe('gpt-6-luna');
+    expect(payload.reasoning).toEqual({effort: 'medium'});
+    expect(payload.max_output_tokens).toBe(8192);
     expect(payload.store).toBe(false);
     expect(payload.input).not.toContain('private-counter');
     return new Response('x'.repeat(65537));
@@ -38,4 +40,27 @@ it('入力・出力・トークン量を制限し、秘密やカウンタをAI�
 it('チョンボと採用の矛盾・不正な重大度を拒否する', () => {
   expect(() => validateVerdict({accepted: true, title: '', explanation: '', violation: 'malicious', severity: 2})).toThrow();
   expect(() => validateVerdict({accepted: false, title: '', explanation: '', violation: 'tokens', severity: 0})).toThrow();
+});
+it('明示した旧モデルにはLuna専用の推論設定を送らない', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (_, init) => {
+    const payload = JSON.parse(init.body);
+    expect(payload.model).toBe('gpt-4.1-mini');
+    expect(payload).not.toHaveProperty('reasoning');
+    expect(payload.max_output_tokens).toBe(2400);
+    return new Response('', {status: 500});
+  }));
+  await expect(judge('提案', DEFAULT_RULES, {OPENAI_API_KEY: 'fake', OPENAI_MODEL: 'gpt-4.1-mini'})).rejects.toThrow('AIサービス');
+});
+it('推論でトークン上限に達した未完了の判定は適用しない', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json({status: 'incomplete', incomplete_details: {reason: 'max_output_tokens'},
+    output: [{type: 'reasoning', summary: []}, {content: [{type: 'output_text', text: JSON.stringify({accepted: true,
+      title: '未完了', explanation: '', violation: 'none', severity: 0, program: {mode: 'none', id: '', code: ''}, rules: DEFAULT_RULES})}]}]})));
+  await expect(judge('提案', DEFAULT_RULES, {OPENAI_API_KEY: 'fake'})).rejects.toThrow('適用できません');
+});
+it('推論ブロックを判定JSONと混ぜず、完成した出力だけを検証する', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json({status: 'completed', output: [{type: 'reasoning', summary: []},
+    {type: 'message', content: [{type: 'output_text', text: JSON.stringify({accepted: true,
+      title: '対子', explanation: '対子1組であがれます。', violation: 'none', severity: 0, program: {mode: 'none', id: '', code: ''},
+      rules: {...DEFAULT_RULES, win_condition: 'any_pair'}})}]}]})));
+  expect((await judge('提案', DEFAULT_RULES, {OPENAI_API_KEY: 'fake'})).rules.win_condition).toBe('any_pair');
 });

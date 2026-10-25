@@ -1,6 +1,6 @@
 import {DurableObject} from 'cloudflare:workers';
 import {Room, GameError, require, randomInt, now} from './game.js';
-import {judge, penalty, updatePrograms, VIOLATIONS} from './referee.js';
+import {judge, penalty, updatePrograms, VIOLATIONS, DEFAULT_MODEL} from './referee.js';
 
 const ROOM_TTL = 6 * 3600;
 const AI_TIMEOUT = 40;
@@ -54,7 +54,7 @@ export default {
     try {
       const url = new URL(request.url);
       if (url.pathname === '/api/health' && request.method === 'GET') {
-        return json({ok: true, ai: Boolean(env.OPENAI_KEY_STORE || env.OPENAI_API_KEY), model: env.OPENAI_MODEL || 'gpt-4.1-mini',
+        return json({ok: true, ai: Boolean(env.OPENAI_KEY_STORE || env.OPENAI_API_KEY), model: env.OPENAI_MODEL || DEFAULT_MODEL,
           transport: 'websocket', daily_ai_limit: dailyLimit(env)});
       }
       if (url.pathname === '/api/action' && request.method === 'POST') {
