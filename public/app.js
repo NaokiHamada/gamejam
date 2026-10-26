@@ -81,7 +81,7 @@ function render(s) {
   $('judge-status').classList.toggle('thinking',s.pending);
   $('speech').disabled=s.pending;
   $('send-speech').disabled=s.pending;
-  $('speech').placeholder=s.pending?'審判がルールを検討しています…':s.status==='finished'?'感想をどうぞ。次の局でルール変更できます。':'「今から白はジョーカーでしょ！」';
+  $('speech').placeholder=s.pending?'審判がルールを検討しています…':s.status==='finished'?'感想をどうぞ。次の局でルール変更できます。':'「対子だけであがれる代わりに1000点！」';
   document.querySelectorAll('[data-say]').forEach(b=>{b.disabled=s.pending||s.status!=='playing';});
   $('reset-rules').hidden=!s.host||s.status==='playing';
   const latest=s.history.findLast(h=>!h.violation);

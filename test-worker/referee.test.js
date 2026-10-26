@@ -7,7 +7,7 @@ it('Secrets Storeから実行時にキーを取得してAIへ渡す', async () =
   vi.stubGlobal('fetch', vi.fn(async (url, options) => {
     expect(url).toBe('https://api.openai.com/v1/responses');
     expect(options.headers.Authorization).toBe('Bearer fake-secret-from-store');
-    return Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({accepted: true, violation: 'none', severity: 0, program: {mode: 'add', id: 'joker', code: JSON.stringify([{on: 'win_check', when: true, do: [['allow_win', ['matches_hand', 'default', '5z']]]}])},
+    return Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({accepted: true, justification: 'sufficient', violation: 'none', severity: 0, program: {mode: 'add', id: 'joker', code: JSON.stringify([{on: 'win_check', when: true, do: [['allow_win', ['matches_hand', 'default', '5z']]]}])},
       title: '白がジョーカー', explanation: '白を好きな牌として使えます。', rules: {...DEFAULT_RULES}})}]}]});
   }));
   const result = await judge('白をジョーカーに', DEFAULT_RULES, {OPENAI_KEY_STORE: {get}});
@@ -39,8 +39,8 @@ it('入力・出力・トークン量を制限し、秘密やカウンタをAI�
   expect(request).not.toHaveBeenCalled();
 });
 it('チョンボと採用の矛盾・不正な重大度を拒否する', () => {
-  expect(() => validateVerdict({accepted: true, title: '', explanation: '', violation: 'malicious', severity: 2})).toThrow();
-  expect(() => validateVerdict({accepted: false, title: '', explanation: '', violation: 'tokens', severity: 0})).toThrow();
+  expect(() => validateVerdict({accepted: true, justification: 'sufficient', title: '', explanation: '', violation: 'malicious', severity: 2})).toThrow();
+  expect(() => validateVerdict({accepted: false, justification: 'not_needed', title: '', explanation: '', violation: 'tokens', severity: 0})).toThrow();
 });
 it('明示した旧モデルにはLuna専用の推論設定を送らない', async () => {
   vi.stubGlobal('fetch', vi.fn(async (_, init) => {
@@ -54,13 +54,13 @@ it('明示した旧モデルにはLuna専用の推論設定を送らない', asy
 });
 it('推論でトークン上限に達した未完了の判定は適用しない', async () => {
   vi.stubGlobal('fetch', vi.fn(async () => Response.json({status: 'incomplete', incomplete_details: {reason: 'max_output_tokens'},
-    output: [{type: 'reasoning', summary: []}, {content: [{type: 'output_text', text: JSON.stringify({accepted: true,
+    output: [{type: 'reasoning', summary: []}, {content: [{type: 'output_text', text: JSON.stringify({accepted: true, justification: 'sufficient',
       title: '未完了', explanation: '', violation: 'none', severity: 0, program: {mode: 'none', id: '', code: ''}, rules: DEFAULT_RULES})}]}]})));
   await expect(judge('提案', DEFAULT_RULES, {OPENAI_API_KEY: 'fake'})).rejects.toThrow('適用できません');
 });
 it('推論ブロックを判定JSONと混ぜず、完成した出力だけを検証する', async () => {
   vi.stubGlobal('fetch', vi.fn(async () => Response.json({status: 'completed', output: [{type: 'reasoning', summary: []},
-    {type: 'message', content: [{type: 'output_text', text: JSON.stringify({accepted: true,
+    {type: 'message', content: [{type: 'output_text', text: JSON.stringify({accepted: true, justification: 'sufficient',
       title: '対子', explanation: '対子1組であがれます。', violation: 'none', severity: 0, program: {mode: 'none', id: '', code: ''},
       rules: {...DEFAULT_RULES}})}]}]})));
   expect((await judge('提案', DEFAULT_RULES, {OPENAI_API_KEY: 'fake'})).title).toBe('対子');
@@ -70,8 +70,16 @@ it('廃止した6項目をAI出力スキーマとルール検証で受け付け�
   for (const [key, value] of Object.entries({win_condition: 'standard', seven_pairs: true, joker: 'none',
     win_points: 6000, reverse_order: false, turn_seconds: 45})) {
     expect(SCHEMA.properties.rules.properties).not.toHaveProperty(key);
-    expect(() => validateVerdict({accepted: true, title: '変更', explanation: '', violation: 'none', severity: 0,
+    expect(() => validateVerdict({accepted: true, justification: 'sufficient', title: '変更', explanation: '', violation: 'none', severity: 0,
       program: {mode: 'none', id: '', code: ''}, rules: {...DEFAULT_RULES, [key]: value}})).toThrow();
   }
   expect(INSTRUCTIONS).toContain('固定設定がない');
+});
+
+it('正当化不足と採用の矛盾・判定漏れを拒否する', () => {
+  const result = {accepted: true, justification: 'insufficient', title: '追加ツモ', explanation: '代償が足りません。',
+    violation: 'none', severity: 0, rules: {...DEFAULT_RULES}, program: {mode: 'none', id: '', code: ''}};
+  expect(() => validateVerdict(result)).toThrow('正当化判定');
+  expect(() => validateVerdict({...result, justification: undefined})).toThrow('正当化判定');
+  expect(validateVerdict({...result, accepted: false}).justification).toBe('insufficient');
 });
