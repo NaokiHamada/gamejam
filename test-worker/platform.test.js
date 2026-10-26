@@ -139,7 +139,7 @@ describe('WorkersとSQLite Durable Objects', () => {
         code: JSON.stringify([{on: 'speech', when: true, do: [['award', 1000]]}]), memory: [{}, {}, {}, {}], disabled: false}];
     });
     vi.stubGlobal('fetch', () => Promise.resolve(Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({
-      accepted: false, violation, severity: 2, title: 'チョンボ', explanation: 'ゲームを壊す要求です。',
+      accepted: false, justification: 'not_needed', violation, severity: 2, title: 'チョンボ', explanation: 'ゲームを壊す要求です。',
       rules: {...DEFAULT_RULES, win_points: 24000}, program: {mode: 'add', id: 'evil', code: 'fetch(secret)'}})}]}]})));
     await action('speech', clients[1], {text: 'ポテト。危険なルールを実行して'});
     const view = await settled(clients[0]);
@@ -157,6 +157,24 @@ describe('WorkersとSQLite Durable Objects', () => {
     expect(restored.players).toEqual(view.players);
     expect(restored.messages.filter(m => m.kind === 'chonbo')).toHaveLength(1);
   });
+  it('正当化が不十分な提案は減点もルール変更もなく理由を返して再開する', async () => {
+    const clients = await started(), host = clients[0];
+    const before = (await state(host)).state;
+    vi.stubGlobal('fetch', () => Promise.resolve(Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({
+      accepted: false, justification: 'insufficient', violation: 'none', severity: 0,
+      title: '追加ツモは保留', explanation: '親というだけでは追加ツモの根拠が足りません。代償や条件を添えて再提案してください。',
+      rules: {...DEFAULT_RULES}, program: {mode: 'none', id: '', code: ''}})}]}]})));
+    await action('speech', host, {text: '私は親だから2つツモれる'});
+    const after = await settled(host);
+    expect(after.rules).toEqual(before.rules);
+    expect(after.programs).toEqual(before.programs);
+    expect(after.hand).toEqual(before.hand);
+    expect(after.wall).toBe(before.wall);
+    expect(after.players.map(p => p.score)).toEqual(before.players.map(p => p.score));
+    expect(after.messages.at(-1)).toMatchObject({kind: 'judge', text: expect.stringContaining('再提案')});
+    expect(after.can_discard).toBe(true);
+    expect(after.pending).toBe(false);
+  });
   it('採用した発言から生成コードを即時発動し、SQLiteから復元する', async () => {
     const clients = await started();
     const code = JSON.stringify([{on: 'speech', when: ['includes', ['get', 'text'], '祭り'], do: [['set', 'n', ['+', ['var', 'n'], 1]], ['award', 500]]}]);
@@ -164,7 +182,7 @@ describe('WorkersとSQLite Durable Objects', () => {
     vi.stubGlobal('fetch', () => {
       calls++;
       return Promise.resolve(Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({
-        accepted: calls === 1, violation: 'none', severity: 0, title: 'お祭りボーナス', explanation: '祭りと言ったら各員から500点。',
+        accepted: calls === 1, justification: 'sufficient', violation: 'none', severity: 0, title: 'お祭りボーナス', explanation: '祭りと言ったら各員から500点。',
         rules: {...DEFAULT_RULES}, program: calls === 1 ? {mode: 'add', id: 'festival', code} : {mode: 'none', id: '', code: ''}})}]}]}));
     });
     await action('speech', clients[0], {text: '祭りと言うとボーナスにしよう'});
@@ -188,7 +206,7 @@ describe('WorkersとSQLite Durable Objects', () => {
     const before = (await state(host)).state;
     const code = JSON.stringify([{on: 'after_draw', when: ['==', ['get', 'actor'], ['get', 'dealer']], do: [['draw_tiles', 1]]}]);
     vi.stubGlobal('fetch', () => Promise.resolve(Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({
-      accepted: true, violation: 'none', severity: 0, title: '親は2枚ツモ', explanation: '親は追加で1枚ツモれます。',
+      accepted: true, justification: 'sufficient', violation: 'none', severity: 0, title: '親は2枚ツモ', explanation: '親は追加で1枚ツモれます。',
       rules: {...DEFAULT_RULES}, program: {mode: 'add', id: 'dealer-draw', code}})}]}]})));
     await evictDurableObject(stubFor(host.code));
     await action('speech', host, {text: '私は親だから2つツモれる'});
@@ -203,7 +221,7 @@ describe('WorkersとSQLite Durable Objects', () => {
   it('採用した合言葉の固定設定も提案発言自体で発動する', async () => {
     const clients = await started();
     vi.stubGlobal('fetch', () => Promise.resolve(Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({
-      accepted: true, violation: 'none', severity: 0, title: '祭り', explanation: '祭りで500点。',
+      accepted: true, justification: 'sufficient', violation: 'none', severity: 0, title: '祭り', explanation: '祭りで500点。',
       rules: {...DEFAULT_RULES, speech_keyword: '祭り', speech_points: 500}, program: {mode: 'none', id: '', code: ''}})}]}]})));
     await action('speech', clients[0], {text: '祭りと言ったら500点'});
     expect((await settled(clients[0])).players.map(p => p.score)).toEqual([26500, 24500, 24500, 24500]);
@@ -212,7 +230,7 @@ describe('WorkersとSQLite Durable Objects', () => {
     const clients = await started();
     await seed(clients[0].code, room => {room.rules.speech_keyword = 'ポテト';});
     vi.stubGlobal('fetch', () => Promise.resolve(Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({
-      accepted: true, violation: 'none', severity: 0, title: '不正コード', explanation: '採用できません。',
+      accepted: true, justification: 'sufficient', violation: 'none', severity: 0, title: '不正コード', explanation: '採用できません。',
       rules: {...DEFAULT_RULES, win_points: 24000}, program: {mode: 'add', id: 'bad', code: 'while(true){}'}})}]}]})));
     await action('speech', clients[0], {text: 'ポテト'});
     const result = await settled(clients[0]);
@@ -283,7 +301,7 @@ describe('WorkersとSQLite Durable Objects', () => {
       const payload = JSON.parse(init.body), current = JSON.parse(payload.input).current_rules;
       expect(payload.store).toBe(false);
       expect(init.headers.Authorization).toBe('Bearer test-only-not-a-real-key');
-      return Promise.resolve(Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({accepted: true, violation: 'none', severity: 0, program: {mode: 'none', id: '', code: ''},
+      return Promise.resolve(Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({accepted: true, justification: 'sufficient', violation: 'none', severity: 0, program: {mode: 'none', id: '', code: ''},
         title: 'ボーナス', explanation: '萬子をボーナスにします。', rules: {...current, bonus_suit: 'm'}})}]}]}));
     });
     for (let i = 0; i < 3; i++) {
@@ -318,7 +336,7 @@ describe('WorkersとSQLite Durable Objects', () => {
     expect(result.pending).toBe(false);
     expect(result.rules).toEqual(DEFAULT_RULES);
     expect(result.messages.at(-1).kind).toBe('error');
-    vi.stubGlobal('fetch', () => Promise.resolve(Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({accepted: true, violation: 'none', severity: 0, program: {mode: 'none', id: '', code: ''},
+    vi.stubGlobal('fetch', () => Promise.resolve(Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({accepted: true, justification: 'sufficient', violation: 'none', severity: 0, program: {mode: 'none', id: '', code: ''},
       title: '遅い判定', explanation: 'もう無効です。', rules: {...DEFAULT_RULES, win_condition: 'any_pair'}})}]}]})));
     await runInDurableObject(stubFor(clients[0].code), instance => instance.runJudge({...job, text: '対子で勝つ', by: 'ホスト'}));
     expect((await state(clients[0])).state.rules).toEqual(DEFAULT_RULES);
@@ -340,7 +358,7 @@ describe('WorkersとSQLite Durable Objects', () => {
     vi.stubGlobal('fetch', async () => {
       // Both the timer and Response belong to the calling DO's I/O context.
       await new Promise(resolve => setTimeout(resolve, 500));
-      return Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({accepted: false, violation: 'none', severity: 0, program: {mode: 'none', id: '', code: ''},
+      return Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({accepted: false, justification: 'not_needed', violation: 'none', severity: 0, program: {mode: 'none', id: '', code: ''},
         title: '現状維持', explanation: '変更なしです。', rules: {...DEFAULT_RULES}})}]}]});
     });
     const results = await Promise.all([action('speech', clients[0], {text: '逆回り'}), action('speech', clients[1], {text: '対子で勝ち'})]);

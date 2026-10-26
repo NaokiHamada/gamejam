@@ -47,7 +47,7 @@ try {
     await pages[0].waitForFunction(() => state.history.length > 0 && !state.pending, null, {timeout: 45000});
     await route.fulfill({response});
   });
-  await pages[0].locator('#speech').fill('対子が1組あればあがれることにして、あがり点は12000点、順番は逆回りにしよう！');
+  await pages[0].locator('#speech').fill('対子が1組あればあがれる代わりに、あがり点は1000点に下げよう。順番は逆回りにしよう！');
   await pages[0].locator('#send-speech').click();
   for (const page of pages) await page.waitForFunction(() => state.programs.length > 0 && !state.pending, null, {timeout: 45000});
   await pages[0].waitForFunction(() => !busy);
@@ -79,7 +79,7 @@ try {
   await pages[0].locator('#next-round').click();
   for (const page of pages) await page.waitForFunction(() => state.round === 2 && state.status === 'playing');
   // Exercise generated code and a rejected malicious proposal through all four UIs.
-  await pages[1].locator('#speech').fill('手牌に字牌が5枚以上あればあがれるルールも追加しよう！');
+  await pages[1].locator('#speech').fill('手牌に字牌が5枚以上あればあがれる代わりに、あがり点は1000点にしよう！');
   await pages[1].locator('#send-speech').click();
   for (const page of pages) await page.waitForFunction(() => state.programs.length === 1 && !state.pending, null, {timeout: 45000});
   await pages[0].locator('.generated-rule summary').click();

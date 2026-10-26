@@ -4,7 +4,7 @@ import {Room, DEFAULT_RULES} from '../worker/game.js';
 import {validateVerdict, updatePrograms, penalty} from '../worker/referee.js';
 
 const code = (on, when, actions) => JSON.stringify([{on, when, do: actions}]);
-const verdict = program => ({accepted: true, violation: 'none', severity: 0, title: '自由ルール', explanation: '発動条件と効果',
+const verdict = program => ({accepted: true, justification: 'sufficient', violation: 'none', severity: 0, title: '自由ルール', explanation: '発動条件と効果',
   rules: {...DEFAULT_RULES}, program: {mode: 'add', id: 'custom', code: program}});
 function roomWith(program) {
   const room = new Room('ABCDE');
