@@ -29,12 +29,46 @@ async function action(type, data={}) {
 }
 function show(view) { for(const id of ['home','lobby','game']) $(id).hidden=id!==view; }
 function tileName(tile) { if(tile==='none') return 'なし'; return tile[1]==='z'?['','東','南','西','北','白','發','中'][Number(tile[0])]:tile[0]+suitNames[tile[1]]; }
+const PIP={b:'#2f5f8f',g:'#2f7048',r:'#b8402f'};
+const pinLayouts={
+  1:[[15,21,11,'1']],
+  2:[[15,11,7.5,'g'],[15,31,7.5,'b']],
+  3:[[7,9,5.5,'b'],[15,21,5.5,'r'],[23,33,5.5,'g']],
+  4:[[8,11,6,'b'],[22,11,6,'g'],[8,31,6,'g'],[22,31,6,'b']],
+  5:[[7.5,9,5.5,'b'],[22.5,9,5.5,'g'],[15,21,5.5,'r'],[7.5,33,5.5,'g'],[22.5,33,5.5,'b']],
+  6:[[8,8,5,'g'],[22,8,5,'g'],[8,22,5,'r'],[22,22,5,'r'],[8,34,5,'r'],[22,34,5,'r']],
+  7:[[6,6,4.2,'g'],[15,10,4.2,'g'],[24,14,4.2,'g'],[9,25,4.5,'r'],[21,25,4.5,'r'],[9,35.5,4.5,'r'],[21,35.5,4.5,'r']],
+  8:[7,16.3,25.7,35].flatMap(y=>[[9,y,4.4,'b'],[21,y,4.4,'b']]),
+  9:[[9,'b'],[21,'r'],[33,'g']].flatMap(([y,c])=>[6.5,15,23.5].map(x=>[x,y,4.1,c])),
+};
+function pinPip([x,y,r,c]) {
+  if(c==='1') return `<circle cx="${x}" cy="${y}" r="${r}" fill="${PIP.b}"/><circle cx="${x}" cy="${y}" r="${r-1.6}" fill="#fffdf3"/><circle cx="${x}" cy="${y}" r="${r-2.6}" fill="${PIP.g}"/>`+Array.from({length:8},(_,i)=>{const a=i*Math.PI/4;return `<circle cx="${(x+Math.cos(a)*6.2).toFixed(2)}" cy="${(y+Math.sin(a)*6.2).toFixed(2)}" r="1" fill="#fffdf3"/>`;}).join('')+`<circle cx="${x}" cy="${y}" r="4.2" fill="#fffdf3"/><circle cx="${x}" cy="${y}" r="3.2" fill="${PIP.r}"/><circle cx="${x}" cy="${y}" r="1.1" fill="#fffdf3"/>`;
+  return `<circle cx="${x}" cy="${y}" r="${r}" fill="${PIP[c]}"/><circle cx="${x}" cy="${y}" r="${(r*.64).toFixed(2)}" fill="none" stroke="#fffdf3" stroke-width="${(r*.2).toFixed(2)}"/><circle cx="${x}" cy="${y}" r="${(r*.2).toFixed(2)}" fill="#fffdf3"/>`;
+}
+const souLayouts={
+  2:[[15,11,17,'g'],[15,31,17,'g']],
+  3:[[15,11,17,'g'],[8,31,17,'g'],[22,31,17,'g']],
+  4:[[8,11,17,'g'],[22,11,17,'g'],[8,31,17,'g'],[22,31,17,'g']],
+  5:[[6.5,11,17,'g'],[23.5,11,17,'g'],[15,21,17,'r'],[6.5,31,17,'g'],[23.5,31,17,'g']],
+  6:[11,31].flatMap(y=>[6.5,15,23.5].map(x=>[x,y,17,'g'])),
+  7:[[15,7,12,'r'],...[21,35].flatMap(y=>[6.5,15,23.5].map(x=>[x,y,12,'g']))],
+  8:[[3.4,11,17,'g'],[11,11,16,'g',-24],[19,11,16,'g',24],[26.6,11,17,'g'],[3.4,31,17,'g'],[11,31,16,'g',24],[19,31,16,'g',-24],[26.6,31,17,'g']],
+  9:[7,21,35].flatMap(y=>[[6.5,y,12,'g'],[15,y,12,'r'],[23.5,y,12,'g']]),
+};
+function souStick([x,y,h,c,rot=0]) {
+  const w=4.4, top=y-h/2;
+  return `<g${rot?` transform="rotate(${rot} ${x} ${y})"`:''}><rect x="${x-w/2}" y="${top}" width="${w}" height="${h}" rx="1.6" fill="${PIP[c]}"/><path d="M${x} ${top+1.6}V${top+h-1.6}" stroke="#fffdf3" stroke-width=".7" opacity=".55"/><path d="M${x-w/2} ${y}h${w}M${x-w/2} ${top+1.3}h${w}M${x-w/2} ${top+h-1.3}h${w}" stroke="#fffdf3" stroke-width=".9"/></g>`;
+}
+const souBird=`<path d="M12 25C7 28 4 33 3.5 39.500C7 36 10 33 14 31Z" fill="${PIP.g}"/><path d="M14 27C11 31 9.500 35 10 40.500C12.500 36 15 33 18 31Z" fill="${PIP.r}"/><path d="M17 27C16 32 16.500 36 18.500 40C19.500 35.500 20.500 33 22 30Z" fill="${PIP.g}"/><ellipse cx="16" cy="20.500" rx="7" ry="9" transform="rotate(18 16 20.500)" fill="${PIP.g}"/><path d="M10.500 17C13 16 18 18 20.500 26C16 26.500 11.500 23.500 10.500 17Z" fill="${PIP.r}"/><path d="M12.500 19.500C14.500 20 16.500 21.500 18 24" fill="none" stroke="#fffdf3" stroke-width=".8"/><circle cx="20" cy="9" r="4.300" fill="${PIP.g}"/><path d="M23.800 7.800L28.500 9.600L23.800 11Z" fill="${PIP.r}"/><circle cx="21" cy="8.300" r="1.150" fill="#fffdf3"/><circle cx="21.200" cy="8.300" r=".5" fill="#22302a"/><path d="M18 5.200C17 3 17.500 1.800 18.500 1M20 4.800C20 2.800 20.800 1.800 22 1.200" fill="none" stroke="${PIP.r}" stroke-width="1" stroke-linecap="round"/>`;
+function tileFace(suit,n) {
+  const art=suit==='p'?pinLayouts[n].map(pinPip).join(''):n===1?souBird:souLayouts[n].map(souStick).join('');
+  return `<svg class="face" viewBox="0 0 30 42" aria-hidden="true">${art}</svg>`;
+}
 function tileHTML(tile, small=false, index=null) {
   const suit=tile[1], n=Number(tile[0]), honor=suit==='z';
   const number=honor?['','東','南','西','北','白','發','中'][n]:['','一','二','三','四','五','六','七','八','九'][n];
-  const symbol=honor?'':{m:'萬',p:'筒',s:'索'}[suit];
   const classes=`tile ${suit}${small?' small':''}${honor&&n===6?' green':''}${honor&&n===5?' white':''}${index===selected?' selected':''}${index===13?' drawn':''}`;
-  const inner=`<span class="number">${number}</span>${symbol?`<span class="suit">${symbol}</span>`:''}`;
+  const inner=suit==='p'||suit==='s'?tileFace(suit,n):suit==='m'?`<span class="man-number">${number}</span><span class="man-suit">萬</span>`:`<span class="number">${number}</span>`;
   return index===null?`<span class="${classes}" title="${tileName(tile)}">${inner}</span>`:`<button class="${classes}" data-tile="${index}" aria-label="${tileName(tile)}${index===selected?' 選択中':''}" aria-pressed="${index===selected}" ${state.can_discard?'':'disabled'}>${inner}</button>`;
 }
 function valueLabel(key,value) {
