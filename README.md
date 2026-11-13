@@ -149,7 +149,7 @@ on('win_score', (g, e) => e.winner === g.memory.double ? e.points * 2 : e.points
 
 `draw` などの短縮名は `after_draw` などと同じです。照会イベントは状態を変えず、ボタン表示のため頻繁に呼ばれます。
 
-`g` は卓の作業用コピーで、書き換えると処理後に検証して一括反映します。`g.players[席]` の `hand`・`river`・`melds`・`score`、`g.wall`（先頭が次のツモ）、`g.direction`（1/−1）、`g.turnSeconds`（5〜300秒に丸め）を直接変更できます。`g.turn`・`g.dealer`・`g.round`・`g.claim` も参照できます。補助関数は `g.draw(席, 枚数)`、`g.pay(払う席, 受け取る席, 点)`、`g.award(席, 点)`（他3人から各点）、`g.win(席, 名前)`（即あがり）、`g.say(文字列)`（卓へのお知らせ）、`g.random(n)`、`g.shuffle(配列)`、`g.next(席)` です。共通ヘルパーとして `TILES`・`rank`・`suit`・`isHonor`・`isTerminal`・`sortTiles`・`countTile`・`isWinningHand(牌, {melds, joker, shape})` があります。
+`g` は卓の作業用コピーで、書き換えると処理後に検証して一括反映します。`g.players[席]` の `hand`・`river`・`melds`・`score`、`g.wall`（先頭が次のツモ）、`g.direction`（1/−1）、`g.turnSeconds`（5〜300秒に丸め）を直接変更できます。`g.turn`・`g.dealer`・`g.round`・`g.claim` も参照できます。補助関数は `g.draw(席, 枚数)`、`g.pay(払う席, 受け取る席, 点)`、`g.award(席, 点)`（他3人から各点）、`g.win(席, 名前)`（即あがり。開局・配牌・得点計算・支払い・局の終了・照会では無効）、`g.say(文字列)`（卓へのお知らせ）、`g.random(n)`、`g.shuffle(配列)`、`g.next(席)` です。共通ヘルパーとして `TILES`・`rank`・`suit`・`isHonor`・`isTerminal`・`sortTiles`・`countTile`・`isWinningHand(牌, {melds, joker, shape})` があります。
 
 `g.memory` はコードごとの永続オブジェクトで、局をまたいで保存されます（JSONで8000文字まで）。役・翻・ドラ・役満のような組込みの仕組みはないので、審判は `win_score` での加点などに読み替えます。暗槓やリーチのように操作ボタンがない宣言は、「カン」「リーチ」などの発言を `after_speech` で受けて表現します。
 

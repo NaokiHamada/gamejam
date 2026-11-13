@@ -332,3 +332,32 @@ describe('レビュー指摘の回帰', () => {
     expect(room.turn).toBe(1);
   });
 });
+
+describe('レビュー指摘の回帰（2回目）', () => {
+  it('同じコード内の複数ハンドラーは前の戻り値を受け取る', () => {
+    const room = roomWith(`on('win_score', () => 1000); on('win_score', (g, e) => e.points * 2);
+      on('win_check', () => false); on('win_check', (g, e) => e.allowed || e.hand.length === 14);`);
+    room.finish(0, 1, ['1z'], 'ロン');
+    expect(room.result.deltas[0]).toBe(2000);
+    room.status = 'playing';
+    expect(room.isWinning(0, [...losing, '7z'])).toBe(true);
+  });
+  it('ツモ前フックの即あがりで流局や追加ツモに進まない', () => {
+    for (const wall of [0, 10]) {
+      const room = roomWith(`on('before_draw', (g, e) => g.win(e.actor, '先取り'));`);
+      room.wall = room.wall.slice(0, wall);
+      const count = room.players[1].hand.length;
+      room.advance();
+      expect(room.result.text).toContain('先取り');
+      expect(room.result.winner).toBe(1);
+      expect(room.players[1].hand).toHaveLength(count);
+      expect(room.wall).toHaveLength(wall);
+    }
+  });
+  it('開局・配牌中の即あがりは無視して通常どおり配る', () => {
+    const room = roomWith(`on('before_round_start', (g, e) => g.win(e.actor)); on('after_deal', (g, e) => g.win(e.actor));`);
+    room.status = 'finished'; room.start(room.players[0]);
+    expect(room.status).toBe('playing');
+    expect(room.players.map(p => p.hand.length)).toEqual([13, 14, 13, 13]);
+  });
+});

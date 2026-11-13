@@ -94,6 +94,8 @@ export class Room {
   draw() {
     if (this.status !== 'playing') return;
     this.applyPrograms('before_draw', this.turn);
+    // A before_draw hook may already have ended the round (g.win).
+    if (this.status !== 'playing') return;
     if (!this.wall.length) {
       this.status = 'finished';
       this.result = {winner: null, text: '流局。山牌がなくなりました。', deltas: [0, 0, 0, 0], hand: []};
@@ -367,14 +369,14 @@ export class Room {
       Object.assign(g, view(JSON.parse(saved)), helpers);
       g.memory = structuredClone(program.memory && !Array.isArray(program.memory) ? program.memory : {});
       try {
-        for (const value of run(program.code, name, g, e)) {
+        run(program.code, name, g, e, value => {
           if (name === 'win_check' && typeof value === 'boolean') e.allowed = value;
           if (['discard_check', 'call_check'].includes(name) && (value === false || typeof value === 'string')) {
             e.allowed = false; if (typeof value === 'string' && value) e.reason = value.slice(0, 60);
           }
           if (['before_score', 'win_score', 'after_score'].includes(name) && typeof value === 'number') e.points = value;
           if (name === 'payment' && Array.isArray(value)) e.deltas = value;
-        }
+        });
         if (name === 'payment' && !(Array.isArray(e.deltas) && e.deltas.length === 4 && e.deltas.every(n => typeof n === 'number' && Number.isFinite(n)))) {
           throw new Error('支払いの配列が不正です。');
         }
@@ -445,7 +447,8 @@ export class Room {
     }
     const cancelledClaim = out.tilesChanged && this.claim;
     if (cancelledClaim) this.claim = null;
-    const win = out.wins[0];
+    // Hands are not dealt yet during round start and deal, so instant wins wait for play.
+    const win = /round_start|_deal$/.test(event) ? null : out.wins[0];
     if (win) this.finish(win.seat, null, this.players[win.seat].hand, win.label);
     else if (cancelledClaim) this.advance();
   }

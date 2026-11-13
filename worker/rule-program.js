@@ -80,15 +80,13 @@ export function handles(code, event) {
 }
 
 // Runs one program's handlers for an event against a mutable view `g`.
-// Returns each handler's return value; throws on code errors or limits.
-export function run(code, event, g, e) {
-  const handlers = compile(code).hooks[eventName(event)] || [];
-  const results = [];
-  for (const handler of handlers) {
+// `apply` receives each return value before the next handler runs, so
+// handlers in one program compose like separate programs. Throws on errors.
+export function run(code, event, g, e, apply) {
+  for (const handler of compile(code).hooks[eventName(event)] || []) {
     shared.steps = 0;
-    results.push(handler(g, e));
+    apply(handler(g, e));
   }
-  return results;
 }
 
 export function validateTable(g, reserve = 0) {
@@ -126,7 +124,7 @@ g.players[席]: {seat, name, score, hand:[牌], river:[打牌順の牌], melds:[
 g.wall: 山の配列。g.wall[0]が次のツモ牌、末尾が底。g.turn(手番), g.dealer(親), g.round(局数), g.direction(1=通常, -1=逆回り), g.turnSeconds(持ち時間秒、初期45、5〜300に丸める), g.claim(ロン・鳴き待ちの{tile, from}またはnull)。
 g.memory: このコード専用の永続オブジェクト。局をまたいで保持し、好きなキーで状態を記録できる(JSON化して8000文字まで)。
 g.draw(席, 枚数=1): 山から手牌へツモし、引いた牌の配列を返す(現在の手番ならツモあがり可能)。g.pay(払う席, 受け取る席, 点): 点の移動。g.award(席, 点): その席が他3人から各点を受け取る(負なら各員へ払う)。
-g.win(席, 名前="生成ルールあがり"): 即あがり(通常の得点計算、手牌の形・枚数は問わない)。g.say(文字列): 卓へお知らせを表示(1回5件)。g.random(n): 0〜n-1の整数乱数。g.shuffle(配列): 配列をその場で並べ替えて返す。g.next(席): 進行方向の次の席。
+g.win(席, 名前="生成ルールあがり"): 即あがり(通常の得点計算、手牌の形・枚数は問わない。round_start/deal/score/payment/round_endと照会では無効)。g.say(文字列): 卓へお知らせを表示(1回5件)。g.random(n): 0〜n-1の整数乱数。g.shuffle(配列): 配列をその場で並べ替えて返す。g.next(席): 進行方向の次の席。
 共通ヘルパー: TILES(34種), rank(牌)=数字(字牌は1〜7), suit(牌)="m"/"p"/"s"/"z", isHonor(牌), isTerminal(牌), sortTiles(配列), countTile(配列, 牌), isWinningHand(牌配列, {melds:副露配列, joker:牌または牌配列, shape:"default"(通常形か七対子)/"standard"/"seven_pairs"})。
 牌は"1m"〜"9m"(萬子),"1p"〜"9p"(筒子),"1s"〜"9s"(索子),"1z"東,"2z"南,"3z"西,"4z"北,"5z"白,"6z"發,"7z"中。同じ牌が5枚以上でも、牌の増減・移動・他人の手牌との交換もよい。1か所200枚、卓全体1024枚まで。
 ツモ・ロンには手牌が14−副露数×3枚必要(win_checkがtrueでも)。g.winはこの制約なし。面子でない副露があると通常判定はあがり不可。手牌0枚の手番はスキップ。ロン・鳴き待ち中に牌を動かすと待ちを解除して次の手番へ進む。配牌中は後続席の13枚ずつを山に残す。
