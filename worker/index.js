@@ -4,6 +4,7 @@ import {judge, penalty, updatePrograms, VIOLATIONS, DEFAULT_MODEL} from './refer
 
 const ROOM_TTL = 6 * 3600;
 const AI_TIMEOUT = 40;
+const JUDGE_QUEUE_LIMIT = 6, JUDGE_QUEUE_PER_PLAYER = 2;
 const CODE = /^[A-HJ-NP-Z2-9]{5}$/;
 const SECURITY = {
   'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY',
@@ -208,21 +209,20 @@ export class MahjongRoom extends DurableObject {
           if (data.action === 'speech') {
             require(typeof data.text === 'string' && [...data.text.trim()].length >= 1 && [...data.text.trim()].length <= 280,
               '発言は1〜280文字で入力してください。');
-            require(!this.room.pending, 'AI審判が考え中です。少し待ってください。');
             require(now() - p.last_speech >= 4, '発言は4秒あけてください。');
             const text = data.text.trim();
             if (this.room.status === 'playing') {
               require(this.env.OPENAI_KEY_STORE || this.env.OPENAI_API_KEY, 'AIキーが未設定です。部屋主にお知らせください。');
-              require(this.room.ai_calls < 80, 'この部屋のAI判定は80回までです。');
+              require(this.room.ai_calls + this.room.judge_queue.length < 80, 'この部屋のAI判定は80回までです。');
+              require(this.room.judge_queue.length < JUDGE_QUEUE_LIMIT, `審議待ちが${JUDGE_QUEUE_LIMIT}件あります。少し待ってから発言してください。`);
+              require(this.room.judge_queue.filter(item => item.token === p.token).length < JUDGE_QUEUE_PER_PLAYER,
+                `あなたの審議待ちは${JUDGE_QUEUE_PER_PLAYER}件までです。判定を待ってから発言してください。`);
               await reserve(this.env, 'ai');
             }
             if (this.room.speech(p, text, true)) {
-              this.room.pending = true; this.room.ai_calls++;
-              const job = {id: crypto.randomUUID(), started: now(), text, seat: this.room.players.indexOf(p), by: p.name, before: structuredClone(this.room.rules), programs: structuredClone(this.room.programs)};
-              this.room.pending_job = job;
-              await this.publish();
-              this.ctx.waitUntil(this.runJudge(job));
-              return json({state: this.snapshot(p)});
+              // Speech posted during a judgment waits its turn; the clock stays paused until the queue drains.
+              this.room.judge_queue.push({token: p.token, text, message: this.room.messages.at(-1).id});
+              this.nextJudge();
             }
           } else {
             const result = this.room.action(data.action, p, data);
@@ -294,6 +294,7 @@ export class MahjongRoom extends DurableObject {
       }
       if (error) this.room.event('error', error);
       this.resume(job);
+      this.nextJudge();
       await this.publish();
     });
   }
@@ -306,6 +307,23 @@ export class MahjongRoom extends DurableObject {
       if (!this.room.players.some((_, i) => this.room.canRon(i))) this.room.advance();
     } else if (this.room.status === 'playing' && this.room.pending_job?.reset_deadline) this.room.deadline = now() + this.room.turn_seconds;
     this.room.pending = false; this.room.pending_job = null;
+  }
+  // Starts the oldest queued speech. The rule snapshot is taken now, so each
+  // proposal is judged against the verdicts of the speeches queued before it.
+  nextJudge() {
+    if (this.room.status !== 'playing' && this.room.judge_queue.length) {
+      this.room.event('system', `局が終わったため、審議待ちの発言${this.room.judge_queue.length}件は判定しません。`);
+      this.room.judge_queue = [];
+    }
+    while (!this.room.pending && this.room.judge_queue.length) {
+      const item = this.room.judge_queue.shift(), p = this.room.player(item.token);
+      if (!p) continue;
+      this.room.pending = true; this.room.ai_calls++;
+      const job = {id: crypto.randomUUID(), started: now(), text: item.text, message: item.message, seat: this.room.players.indexOf(p), by: p.name,
+        before: structuredClone(this.room.rules), programs: structuredClone(this.room.programs)};
+      this.room.pending_job = job;
+      this.ctx.waitUntil(this.runJudge(job));
+    }
   }
   async expire() {
     this.room = null;
@@ -321,6 +339,7 @@ export class MahjongRoom extends DurableObject {
       if (job && now() >= job.started + AI_TIMEOUT) {
         this.room.event('error', 'AI判定が中断されました。ルールを維持して再開します。');
         this.resume(job);
+        this.nextJudge();
       } else this.room.tick();
       await this.publish();
     });

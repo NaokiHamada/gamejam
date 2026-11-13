@@ -77,12 +77,11 @@ function render(s) {
   $('action-help').textContent=s.pending?'ルール判定が終わるまで一時停止中':s.call_pending?'鳴きを申請しました。ほかの人の応答を待っています。':s.can_ron?'8秒以内にロンを宣言！':s.call_options?.length?'8秒以内に鳴くか、見送ってください。':s.can_tsumo?'今のルールであがれます！':s.status==='finished'?'ルール・持ち点は次の局へ引き継ぎます。':'自由に発言して、対局をひっくり返そう。';
   $('tsumo').hidden=!s.can_tsumo; $('ron').hidden=!s.can_ron; $('pass').hidden=!s.can_ron&&!s.call_options?.length;
   $('discard').hidden=s.status==='finished';
-  $('judge-status').textContent=s.pending?'✦ 判定中・時計停止':'AI審判 待機中';
+  const queued=s.judge_queue?.length||0;
+  $('judge-status').textContent=s.pending?'✦ 判定中・時計停止'+(queued?`（審議待ち${queued}件）`:''):'AI審判 待機中';
   $('judge-status').classList.toggle('thinking',s.pending);
-  $('speech').disabled=s.pending;
-  $('send-speech').disabled=s.pending;
-  $('speech').placeholder=s.pending?'審判がルールを検討しています…':s.status==='finished'?'感想をどうぞ。次の局でルール変更できます。':'「対子だけであがれる代わりに1000点！」';
-  document.querySelectorAll('[data-say]').forEach(b=>{b.disabled=s.pending||s.status!=='playing';});
+  $('speech').placeholder=s.pending?'審議中も発言できます。順番に判定します':s.status==='finished'?'感想をどうぞ。次の局でルール変更できます。':'「対子だけであがれる代わりに1000点！」';
+  document.querySelectorAll('[data-say]').forEach(b=>{b.disabled=s.status!=='playing';});
   $('reset-rules').hidden=!s.host||s.status==='playing';
   const latest=s.history.findLast(h=>!h.violation);
   $('rule-banner-text').textContent=latest?latest.title:'まだ世界は、普通の麻雀。';
@@ -101,7 +100,8 @@ function render(s) {
     const messages=$('messages'), nearBottom=messages.scrollHeight-messages.scrollTop-messages.clientHeight<70;
     messages.innerHTML=s.messages.map(m=> {
       const mine=m.seat===s.me;
-      if(m.kind==='speech') return `<div class="message${mine?' mine':''}"><div class="message-name">${esc(m.name)}${mine?' · あなた':''}</div><div class="speech-bubble">${esc(m.text)}</div></div>`;
+      const queuedAt=(s.judge_queue||[]).indexOf(m.id), review=m.id===s.judging?'<span class="review-tag">審議中</span>':queuedAt>=0?`<span class="review-tag waiting">審議待ち ${queuedAt+1}</span>`:'';
+      if(m.kind==='speech') return `<div class="message${mine?' mine':''}"><div class="message-name">${esc(m.name)}${mine?' · あなた':''}${review}</div><div class="speech-bubble">${esc(m.text)}</div></div>`;
       const isJudge=['rule','judge','chonbo'].includes(m.kind);
       return `<div class="message ${esc(m.kind)}">${isJudge?'<div class="message-name">✦ AI審判'+(m.kind==='rule'?' · ルール改変！':'')+'</div>':''}${m.title?`<div class="message-title">${esc(m.title)}</div>`:''}${esc(m.text)}${m.tile?' '+tileName(m.tile):''}</div>`;
     }).join('');
@@ -115,7 +115,7 @@ function render(s) {
     $('next-round')?.addEventListener('click',()=>action('start'));
     $('result-reset')?.addEventListener('click',()=>action('reset_rules'));
   }
-  if(previous?.pending&&!s.pending) { const last=s.messages.at(-1); if(last?.kind==='rule') toast('✦ '+last.title); }
+  if(previous?.code===s.code) { const adopted=s.messages.filter(m=>m.kind==='rule'&&m.id>previous.version).at(-1); if(adopted) toast('✦ '+adopted.title); }
   renderTimer();
 }
 function renderHand() {
@@ -163,7 +163,7 @@ $('reset-rules').addEventListener('click',()=>action('reset_rules'));
 document.querySelectorAll('.copy-invite').forEach(b=>b.addEventListener('click',copyInvite));
 $('speech').addEventListener('input',()=>{$('speech-count').textContent=$('speech').value.length+' / 280';});
 $('speech').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();$('speech-form').requestSubmit();}});
-$('speech-form').addEventListener('submit',async e=>{e.preventDefault();const text=$('speech').value.trim();if(!text||busy||state.pending)return;const result=await action('speech',{text});if(result){$('speech').value='';$('speech-count').textContent='0 / 280';}});
+$('speech-form').addEventListener('submit',async e=>{e.preventDefault();const text=$('speech').value.trim();if(!text||busy)return;const result=await action('speech',{text});if(result){$('speech').value='';$('speech-count').textContent='0 / 280';}});
 document.querySelectorAll('[data-say]').forEach(b=>b.addEventListener('click',()=>{$('speech').value=b.dataset.say;$('speech').dispatchEvent(new Event('input'));$('speech').focus();}));
 const invited=new URLSearchParams(location.search).get('room');
 if(invited) $('room-code').value=invited.toUpperCase().slice(0,5);
