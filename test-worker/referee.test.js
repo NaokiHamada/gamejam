@@ -1,5 +1,5 @@
 import {afterEach, expect, it, vi} from 'vitest';
-import {judge, validateVerdict} from '../worker/referee.js';
+import {judge, validateVerdict, INSTRUCTIONS} from '../worker/referee.js';
 import {DEFAULT_RULES} from '../worker/game.js';
 afterEach(() => vi.unstubAllGlobals());
 it('Secrets Storeから実行時にキーを取得してAIへ渡す', async () => {
@@ -76,10 +76,20 @@ it('廃止した6項目をAI出力スキーマとルール検証で受け付け�
   expect(INSTRUCTIONS).toContain('固定設定がない');
 });
 
-it('正当化不足と採用の矛盾・判定漏れを拒否する', () => {
-  const result = {accepted: true, justification: 'insufficient', title: '追加ツモ', explanation: '代償が足りません。',
+it('面白さ不足と採用・代償追加と不採用の矛盾や判定漏れを拒否する', () => {
+  const result = {accepted: true, justification: 'not_fun', title: '変化なし', explanation: '今と変わりません。',
     violation: 'none', severity: 0, rules: {...DEFAULT_RULES}, program: {mode: 'none', id: '', code: ''}};
   expect(() => validateVerdict(result)).toThrow('正当化判定');
   expect(() => validateVerdict({...result, justification: undefined})).toThrow('正当化判定');
-  expect(validateVerdict({...result, accepted: false}).justification).toBe('insufficient');
+  expect(validateVerdict({...result, accepted: false}).justification).toBe('not_fun');
+  expect(() => validateVerdict({...result, accepted: false, justification: 'cost_added'})).toThrow('正当化判定');
+  expect(validateVerdict({...result, justification: 'cost_added', explanation: '代償として各員へ300点。'}).accepted).toBe(true);
+  expect(() => validateVerdict({...result, justification: 'insufficient'})).toThrow('正当化判定');
+});
+
+it('代償不足では却下せず審判が代償を追加して採用するよう指示する', () => {
+  expect(INSTRUCTIONS).toContain('代償やデメリットがない、または足りないことを不採用の理由にしない');
+  expect(INSTRUCTIONS).toContain('cost_added');
+  expect(INSTRUCTIONS).toContain('全員が同時に等しく有利になるルール');
+  expect(INSTRUCTIONS).toContain('1人だけが有利になるルール');
 });
