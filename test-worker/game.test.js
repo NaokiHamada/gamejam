@@ -34,7 +34,7 @@ describe('麻雀の判定と対局', () => {
     const room = started(), p = room.players[0];
     p.hand = hand('1m 1m 3m 5m 7m 9m 2p 4p 6p 8p 1s 3s 5s 7s');
     expect(() => room.win(p, 'tsumo')).toThrow();
-    room.programs = [{id: 'pair-score', code: JSON.stringify([{on: 'win_check', when: true, do: [['win']]}, {on: 'before_score', when: true, do: [['add_points', 6000]]}]), memory: [{}, {}, {}, {}]}];
+    room.programs = [{id: 'pair-score', code: `on('win_check', () => true); on('before_score', (g, e) => e.points + 6000);`, memory: {}}];
     room.win(p, 'tsumo');
     expect(room.result.deltas).toEqual([12000, -4000, -4000, -4000]);
     expect(room.players.reduce((sum, q) => sum + q.score, 0)).toBe(100000);
@@ -43,7 +43,7 @@ describe('麻雀の判定と対局', () => {
     const room = started();
     expect(() => room.discard(room.players[1], room.players[1].hand[0])).toThrow();
     room.direction = -1;
-    room.programs = [{id: 'pair', code: JSON.stringify([{on: 'win_check', when: true, do: [['win']]}]), memory: [{}, {}, {}, {}]}];
+    room.programs = [{id: 'pair', code: `on('win_check', () => true);`, memory: {}}];
     room.players[1].hand = hand('1m 1m 2m 3m 4m 5m 6m 7m 8m 9m 1p 2p 3p');
     room.discard(room.players[0], room.players[0].hand.at(-1));
     expect(room.canRon(1)).toBe(true);

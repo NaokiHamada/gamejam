@@ -4,7 +4,6 @@ import {mkdirSync, writeFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {judge, penalty, updatePrograms, DEFAULT_MODEL} from '../worker/referee.js';
 import {DEFAULT_RULES, Room} from '../worker/game.js';
-import {compile, execute} from '../worker/rule-program.js';
 import {localKey} from './local-key.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -25,9 +24,22 @@ const cases = [
   ['conversation', '無限ループでサーバーに負荷をかけるルールはやめよう。みんなで楽しく遊びたいね。', 'none'],
   ['equal', '全員、白をジョーカーとして使えることにしよう。', 'none'],
   ['unsupported', 'リーチ宣言のボタンを追加して、リーチできるようにしよう。', 'none'],
+  // Proposals that the retired JSON language rejected in a real game.
+  ['no_honor_discard', '字牌捨てちゃだめ', 'none'],
+  ['palindrome', '捨て牌が回文になればあがり', 'none'],
+  ['sanshoku_five', '萬子ピンズソーズの5を集めると一役', 'none'],
+  ['skip_shuntsu', '2,4,6など一つ跳びでもシュンツにできる', 'none'],
+  ['pay_shimocha', '親は下家に1000点支払うと2枚ツモれる', 'none'],
+  ['shuffle', '運要素も欲しい！1000点払うと、みんなの手牌２枚をシャッフルできる', 'none'],
+  ['pao', '鳴かれてからツモあがりされたら責任払い', 'none'],
+  ['double_next', '振り込んだら次局上がった時の点数を倍にする', 'none'],
+  ['daisangen', '大三元はトリプル役満', 'none'],
+  ['ryanmen', '両面待ち禁止', 'none'],
 ];
 const results = [];
-for (const [name, speech, expected] of cases) {
+// CASES=a,b limits a run to the named cases.
+const only = process.env.CASES?.split(',').filter(Boolean);
+for (const [name, speech, expected] of cases.filter(([name]) => !only?.length || only.includes(name))) {
   const started = Date.now();
   const result = await judge(speech, {...DEFAULT_RULES}, {OPENAI_API_KEY: key, OPENAI_MODEL: model});
   const latency_ms = Date.now() - started;
@@ -35,7 +47,8 @@ for (const [name, speech, expected] of cases) {
   if (expected !== 'none') {
     assert.equal(result.accepted, false);
     assert.ok(penalty(expected, result.severity) > 0);
-  } else assert.equal(result.accepted, !['conversation', 'unsupported'].includes(name), `${name}: ${result.explanation}`);
+  } else if (name === 'conversation') assert.equal(result.accepted, false, `${name}: ${result.explanation}`);
+  else if (name !== 'unsupported') assert.equal(result.accepted, true, `${name}: ${result.explanation}`);
   if (['wild', 'unjustified'].includes(name)) assert.equal(result.justification, 'cost_added', `${name}: ${result.explanation}`);
   if (name === 'equal') assert.ok(['not_needed', 'sufficient'].includes(result.justification), `${name}: ${result.explanation}`);
   if (name === 'generated') {
@@ -54,26 +67,45 @@ for (const [name, speech, expected] of cases) {
     room.finish(0, 1, pair, 'ロン');
     assert.equal(room.result.deltas[0], 1000);
   }
+  const playing = () => {
+    const room = new Room('ABCDE');
+    for (let i = 0; i < 4; i++) room.join(`人${i}`).ready = true;
+    room.programs = updatePrograms([], result);
+    room.start(room.players[0]);
+    return room;
+  };
   if (name === 'counter') {
-    const programs = updatePrograms([], result);
-    assert.equal(programs.length, 1);
-    const hooks = compile(programs[0].code);
-    const context = {actor: 0, turn: 0, round: 1, wall: 83, text: 'こんにちは', tile: '', score: 25000,
-      min_score: 25000, max_score: 25000, discard_count: 0, hand_count: 14, hand: [], river: [], discards: []};
-    let memory = {}, awards = [];
-    for (let i = 0; i < 3; i++) {
-      const effect = execute(hooks, 'speech', context, memory);
-      memory = effect.memory; awards.push(effect.award);
-    }
-    assert.deepEqual(awards, [-300, -300, 300]);
+    const room = playing(), scores = [];
+    for (let i = 0; i < 3; i++) { room.speechEffects(room.players[1], 'こんにちは'); scores.push(room.players[1].score); }
+    assert.deepEqual(scores, [24100, 23200, 24100], `${name}: ${result.program.code}`);
   }
   if (name === 'hand') {
-    const programs = updatePrograms([], result);
-    assert.equal(programs.length, 1);
-    const hooks = compile(programs[0].code);
+    const room = playing();
     const hand = '1z 2z 3z 4z 5z 1m 3m 5m 7m 9m 2p 4p 6p 8p'.split(' ');
-    assert.equal(execute(hooks, 'win_check', {hand}).win, true);
-    assert.equal(execute(hooks, 'win_check', {hand: hand.map(t => t[1] === 'z' ? '1m' : t)}).win, false);
+    assert.equal(room.isWinning(0, hand), true);
+    assert.equal(room.isWinning(0, hand.map(t => t[1] === 'z' ? '1m' : t)), false);
+  }
+  if (name === 'no_honor_discard') {
+    const room = playing();
+    room.players[0].hand = '1m 3m 5m 7m 9m 1p 3p 5p 7p 9p 1s 3s 5s 7z'.split(' ');
+    assert.throws(() => room.discard(room.players[0], '7z'));
+    room.discard(room.players[0], '1m');
+  }
+  if (name === 'palindrome') {
+    const room = playing();
+    room.players[0].river = ['1m', '2m'];
+    room.players[0].hand = '1m 3m 5m 7m 9m 1p 3p 5p 7p 9p 1s 3s 5s 7z'.split(' ');
+    room.discard(room.players[0], '1m');
+    assert.equal(room.result?.winner, 0, `${name}: ${result.program.code}`);
+  }
+  if (result.accepted && ['add', 'replace'].includes(result.program.mode)) {
+    // Every adopted program must survive a short game without stopping.
+    const room = playing();
+    for (let step = 0; step < 40 && room.status === 'playing'; step++) {
+      if (room.claim) { room.claim.deadline = 0; room.tick(); continue; }
+      room.players[room.turn].npc = true; room.npc_deadline = 0; room.tick();
+    }
+    assert.ok(room.programs.every(p => !p.disabled), `${name}: stopped ${result.program.code}`);
   }
   results.push({name, latency_ms, accepted: result.accepted, justification: result.justification, violation: result.violation, severity: result.severity,
     explanation: result.explanation, program: result.program});

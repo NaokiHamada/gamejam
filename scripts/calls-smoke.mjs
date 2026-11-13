@@ -29,7 +29,7 @@ try {
     room.players.forEach(p => {p.hand = [...losing]; p.river = [];});
     room.players[0].river = [tile]; room.players[1].hand.splice(0, owned.length, ...owned);
     // Keep a competing ron alive so the UI must show a pending call first.
-    room.programs = [{id: 'test-ron', title: 'テスト用あがり条件', code: JSON.stringify([{on: 'win_check', when: ['==', ['get', 'actor'], 2], do: [['win']]}]), memory: [{}, {}, {}, {}]}];
+    room.programs = [{id: 'test-ron', title: 'テスト用あがり条件', code: `on('win_check', (g, e) => e.actor === 2 || undefined);`, memory: {}}];
     room.claim = {from: 0, tile, passed: [], requests: [], deadline: Date.now() / 1000 + 60};
     const pages = [], contexts = [], sockets = new Set(), errors = [];
     const broadcast = () => {for (const {ws, seat} of sockets) ws.send(JSON.stringify({state: room.snapshot(room.players[seat])}));};
