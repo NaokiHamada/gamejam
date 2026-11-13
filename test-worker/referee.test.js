@@ -93,3 +93,9 @@ it('代償不足では却下せず審判が代償を追加して採用するよ�
   expect(INSTRUCTIONS).toContain('全員が同時に等しく有利になるルール');
   expect(INSTRUCTIONS).toContain('1人だけが有利になるルール');
 });
+
+it('審判の解説を黒服の立会人の口調にしつつ効果は正確に書くよう指示する', () => {
+  expect(INSTRUCTIONS).toContain('黒服の立会人');
+  expect(INSTRUCTIONS).toContain('効果・代償・減点理由は口調に埋もれさせず正確に書く');
+  expect(INSTRUCTIONS).toContain('titleは口調を付けず');
+});
