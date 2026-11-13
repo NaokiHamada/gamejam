@@ -36,11 +36,12 @@ export class Room {
   constructor(code) {
     Object.assign(this, {code, players: [], status: 'lobby', rules: {...DEFAULT_RULES}, history: [], messages: [], programs: [],
       direction: 1, turn_seconds: 45, pending: false, ai_calls: 0, round: 0, version: 0, wall: [], turn: 0, claim: null, deadline: 0, drawn: false,
-      result: null, created: now(), touched: now(), pending_job: null, npc_deadline: 0, recent_events: []});
+      result: null, created: now(), touched: now(), pending_job: null, judge_queue: [], npc_deadline: 0, recent_events: []});
   }
   static restore(data) {
     const room = Object.assign(new Room(data.code), {drawn: data.status === 'playing' && !data.claim}, data);
     room.rules = Object.fromEntries(Object.entries(DEFAULT_RULES).map(([key, value]) => [key, data.rules?.[key] ?? value]));
+    if (!Array.isArray(room.judge_queue)) room.judge_queue = [];
     return room;
   }
   event(kind, text, extra = {}) {
@@ -402,6 +403,7 @@ export class Room {
       players: this.players.map(q => ({name: q.name, score: q.score, ready: q.ready, npc: Boolean(q.npc),
         online: Boolean(q.npc) || (connected ? connected.has(q.token) : now() - q.seen < 15), count: q.hand.length, river: q.river, melds: q.melds || []})),
       hand: p.hand, messages: this.messages, history: this.history.slice(-30), pending: this.pending,
+      judging: this.pending_job?.message ?? null, judge_queue: this.judge_queue.map(item => item.message),
       ai_calls: this.ai_calls, result: this.result, claim: this.claim ? {tile: this.claim.tile, from: this.claim.from, deadline: this.claim.deadline} : null,
       deadline: this.claim?.deadline ?? this.deadline, server_time: now(), can_discard: active && !this.claim && i === this.turn && p.hand.length > 0,
       call_options: active ? this.callOptions(i) : [], call_pending: Boolean(this.claim?.requests?.some(r => r.seat === i)),

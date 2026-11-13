@@ -316,6 +316,56 @@ describe('WorkersとSQLite Durable Objects', () => {
     expect((await state(next[0])).state.ai_calls).toBe(0);
     expect((await state(next[0])).state.messages.some(m => m.kind === 'speech')).toBe(false);
   });
+  it('判定中の発言を審議キューに積み、前の判定結果を踏まえて順番に判定する', async () => {
+    const clients = await started(), seen = [];
+    vi.stubGlobal('fetch', (input, init) => {
+      const payload = JSON.parse(JSON.parse(init.body).input), suit = {萬子: 'm', 筒子: 'p'}[payload.speech.slice(0, 2)] ?? payload.current_rules.bonus_suit;
+      seen.push({speech: payload.speech, bonus: payload.current_rules.bonus_suit});
+      return Promise.resolve(Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({
+        accepted: true, justification: 'sufficient', violation: 'none', severity: 0, program: {mode: 'none', id: '', code: ''},
+        title: 'ボーナス', explanation: 'ボーナスを変えます。', rules: {...payload.current_rules, bonus_suit: suit}})}]}]}));
+    });
+    const blocker = {id: 'blocker', started: Date.now() / 1000, before: {...DEFAULT_RULES}};
+    await seed(clients[0].code, room => {room.pending = true; room.pending_job = blocker;});
+    const first = await action('speech', clients[0], {text: '萬子をボーナスに'});
+    expect(first.status).toBe(200);
+    expect(first.state.judge_queue).toHaveLength(1);
+    expect(first.state.messages.find(m => m.id === first.state.judge_queue[0]).text).toBe('萬子をボーナスに');
+    expect((await action('speech', clients[1], {text: '筒子をボーナスに'})).status).toBe(200);
+    await seed(clients[0].code, room => {room.players[1].last_speech = 0;});
+    expect((await action('speech', clients[1], {text: '筒子でもう1件'})).status).toBe(200);
+    await seed(clients[0].code, room => {room.players[1].last_speech = 0;});
+    expect((await action('speech', clients[1], {text: '3件目'})).status).toBe(400);
+    const waiting = (await state(clients[2])).state;
+    expect(waiting.judge_queue).toHaveLength(3);
+    expect(waiting.ai_calls).toBe(0);
+    expect(seen).toEqual([]);
+    await runInDurableObject(stubFor(clients[0].code), async instance => {instance.resume(blocker); instance.nextJudge(); await instance.publish();});
+    const after = await settled(clients[0]);
+    expect(seen.map(s => s.speech)).toEqual(['萬子をボーナスに', '筒子をボーナスに', '筒子でもう1件']);
+    expect(seen.map(s => s.bonus)).toEqual(['none', 'm', 'p']);
+    expect(after.rules.bonus_suit).toBe('p');
+    expect(after.judge_queue).toEqual([]);
+    expect(after.ai_calls).toBe(3);
+    expect(after.can_discard).toBe(true);
+  });
+  it('局が終わったら審議待ちの発言をAIへ送らず破棄する', async () => {
+    const clients = await started();
+    let calls = 0;
+    vi.stubGlobal('fetch', () => {calls++; return Promise.resolve(new Response('', {status: 500}));});
+    const blocker = {id: 'blocker', started: Date.now() / 1000, before: {...DEFAULT_RULES}};
+    await seed(clients[0].code, room => {room.pending = true; room.pending_job = blocker;});
+    expect((await action('speech', clients[1], {text: '逆回りに'})).status).toBe(200);
+    await runInDurableObject(stubFor(clients[0].code), async instance => {
+      instance.room.finish(0, null, instance.room.players[0].hand, 'テスト');
+      instance.resume(blocker); instance.nextJudge(); await instance.publish();
+    });
+    const after = (await state(clients[0])).state;
+    expect(after.pending).toBe(false);
+    expect(after.judge_queue).toEqual([]);
+    expect(after.ai_calls).toBe(0); expect(calls).toBe(0);
+    expect(after.messages.at(-1).text).toContain('審議待ちの発言1件');
+  });
   it('AI通信エラー時にルールを維持し時計を再開する', async () => {
     const clients = await started();
     vi.stubGlobal('fetch', () => Promise.resolve(new Response('private error body', {status: 429})));
@@ -353,19 +403,27 @@ describe('WorkersとSQLite Durable Objects', () => {
     const large = await SELF.fetch(origin + '/api/action', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: 'a'.repeat(5000)})});
     expect(large.status).toBe(413);
   });
-  it('同時発言は1件だけをAI判定に送り、別の発言は副作用なく拒否する', async () => {
+  it('同時発言は両方受け付け、AI判定は1件ずつ直列に送る', async () => {
     const clients = await started();
+    let active = 0, peak = 0, calls = 0;
     vi.stubGlobal('fetch', async () => {
+      active++; calls++; peak = Math.max(peak, active);
       // Both the timer and Response belong to the calling DO's I/O context.
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise(resolve => setTimeout(resolve, 200));
+      active--;
       return Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({accepted: false, justification: 'not_needed', violation: 'none', severity: 0, program: {mode: 'none', id: '', code: ''},
         title: '現状維持', explanation: '変更なしです。', rules: {...DEFAULT_RULES}})}]}]});
     });
     const results = await Promise.all([action('speech', clients[0], {text: '逆回り'}), action('speech', clients[1], {text: '対子で勝ち'})]);
-    expect(results.map(r => r.status).sort()).toEqual([200, 400]);
-    expect((await state(clients[0])).state.ai_calls).toBe(1);
-    expect((await state(clients[0])).state.messages.filter(m => m.kind === 'speech')).toHaveLength(1);
-    await settled(clients[0]);
+    expect(results.map(r => r.status)).toEqual([200, 200]);
+    const during = (await state(clients[0])).state;
+    expect(during.pending).toBe(true);
+    expect(during.judge_queue).toHaveLength(1);
+    expect(during.messages.filter(m => m.kind === 'speech')).toHaveLength(2);
+    const after = await settled(clients[0]);
+    expect(calls).toBe(2); expect(peak).toBe(1);
+    expect(after.ai_calls).toBe(2);
+    expect(after.messages.filter(m => m.kind === 'judge')).toHaveLength(2);
   });
   it('日次アラームの遅延で当日分のAI上限が消えない', async () => {
     const clients = await started(), limits = env.LIMITS.getByName('global');
