@@ -380,3 +380,19 @@ describe('レビュー指摘の回帰（3回目）', () => {
     expect(room.programs[0].disabled).toBe(true);
   });
 });
+
+describe('レビュー指摘の回帰（4回目）', () => {
+  it('鳴き後に1枚戻して引き直したツモでもあがれる', () => {
+    const room = roomWith(`on('after_call', (g, e) => { const h = g.players[e.actor].hand; g.wall.push(h.splice(h.indexOf('9s'), 1)[0]); g.draw(e.actor); });`);
+    for (const p of room.players) { p.hand = [...losing]; p.river = []; }
+    room.players[1].hand = split('5z 5z 1m 2m 3m 4m 5m 6m 7p 8p 9p 1z 9s');
+    room.wall = [...room.wall.slice(0, 10), '1z'];
+    room.players[0].river = ['5z']; room.claim = {tile: '5z', from: 0, passed: [], requests: [], deadline: Date.now() / 1000 + 8};
+    room.call(room.players[1], 'pon', ['5z', '5z']);
+    expect(room.players[1].hand).toHaveLength(11);
+    expect(room.drawn).toBe(true);
+    expect(room.snapshot(room.players[1]).can_tsumo).toBe(true);
+    room.win(room.players[1], 'tsumo');
+    expect(room.result.winner).toBe(1);
+  });
+});

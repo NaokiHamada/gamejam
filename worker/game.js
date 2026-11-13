@@ -342,7 +342,7 @@ export class Room {
       draw: (s, count = 1) => {
         s = seat(s);
         if (!Number.isInteger(count) || count < 0 || count > LIMITS.pool) throw new Error('ツモ枚数が不正です。');
-        const tiles = g.wall.splice(0, count); g.players[s].hand.push(...tiles); return tiles;
+        const tiles = g.wall.splice(0, count); g.players[s].hand.push(...tiles); if (tiles.length) fx.draws.push(s); return tiles;
       },
       pay: (from, to, points) => { g.players[seat(from)].score -= amount(points); g.players[seat(to)].score += points; },
       award: (s, points) => { s = seat(s); amount(points); g.players.forEach((p, j) => { if (j !== s) { p.score -= points; g.players[s].score += points; } }); },
@@ -361,10 +361,10 @@ export class Room {
     const e = {type: name, actor: i, tile: '', text: '', callType: '', source: -1, tiles: [], winner: -1, loser: -1, method: '', ...structuredClone(extra)};
     // Later seats must still receive their normal 13-tile deal.
     const reserve = {before_round_start: 52, before_deal: (4 - i) * 13, after_deal: (3 - i) * 13}[name] || 0;
-    const original = data(), wins = [], says = [];
+    const original = data(), wins = [], says = [], draws = [];
     for (const program of active) {
       const saved = data(), savedEvent = structuredClone(e);
-      fx = {wins: [], says: []};
+      fx = {wins: [], says: [], draws: []};
       // A previous program may have replaced helpers or read-only fields.
       Object.assign(g, view(JSON.parse(saved)), helpers);
       g.memory = structuredClone(program.memory && !Array.isArray(program.memory) ? program.memory : {});
@@ -384,7 +384,7 @@ export class Room {
         }
         validateTable(g, reserve);
         if (commit) program.memory = JSON.parse(JSON.stringify(g.memory ?? {}));
-        wins.push(...fx.wins); says.push(...fx.says.map(text => `${program.title || '生成ルール'}：${text}`));
+        wins.push(...fx.wins); draws.push(...fx.draws); says.push(...fx.says.map(text => `${program.title || '生成ルール'}：${text}`));
       } catch {
         // A model's code bug is never a player's chonbo. Fail closed and continue play.
         // Code may have replaced whole arrays or objects, so rebuild the view.
@@ -415,7 +415,8 @@ export class Room {
     this.direction = g.direction;
     const seconds = Math.max(5, Math.min(300, Math.round(g.turnSeconds))), secondsChanged = seconds !== this.turn_seconds;
     this.turn_seconds = seconds;
-    const drew = tilesChanged && (this.players[drawSeat]?.hand.length ?? 0) > held;
+    // g.draw() counts even when the hand size is unchanged (e.g. return one, draw one).
+    const drew = tilesChanged && (draws.includes(drawSeat) || (this.players[drawSeat]?.hand.length ?? 0) > held);
     const changed = this.players.map((p, s) => p.score - before[s]);
     if (changed.some(Boolean)) {
       this.event('system', `生成ルール発動：${this.players.map((p, s) => changed[s] ? `${p.name} ${changed[s] > 0 ? '+' : '−'}${Math.abs(changed[s]).toLocaleString('en-US')}` : '').filter(Boolean).join(' / ')}`);
