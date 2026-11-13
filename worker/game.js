@@ -117,7 +117,11 @@ export class Room {
     const blocked = this.discardBlock(this.turn, tile);
     // A rule that forbids every tile in hand is ignored for this turn.
     require(!blocked || !p.hand.some(t => !this.discardBlock(this.turn, t)), blocked);
-    this.applyPrograms('before_discard', this.turn, {tile});
+    const seat = this.turn;
+    this.applyPrograms('before_discard', seat, {tile});
+    // The hook may have ended the round, moved the turn, or taken the tile away.
+    if (this.status !== 'playing' || this.turn !== seat || this.claim) return;
+    if (!p.hand.includes(tile)) { this.event('system', `生成ルールにより${p.name}の打牌は取り消されました。`); return; }
     this.drawn = false;
     p.hand.splice(p.hand.indexOf(tile), 1); p.hand = sortedHand(p.hand); p.river.push(tile);
     this.claim = {tile, from: this.turn, passed: [], requests: [], deadline: now() + 8};
@@ -187,6 +191,8 @@ export class Room {
     if (!request) { this.advance(); return; }
     const p = this.players[request.seat], extra = {tile: claim.tile, callType: request.type, source: claim.from, tiles: [...request.tiles]};
     this.applyPrograms('before_call', request.seat, extra);
+    // Tile edits cancel the claim and advance play; then this call no longer applies.
+    if (this.status !== 'playing' || this.claim !== claim) return;
     for (const tile of request.tiles) p.hand.splice(p.hand.indexOf(tile), 1);
     p.hand = sortedHand(p.hand); p.melds ||= [];
     p.melds.push({type: request.type, tiles: sortedHand([...request.tiles, claim.tile]), from: claim.from});
@@ -390,8 +396,9 @@ export class Room {
     if (name === 'payment') e.deltas = e.deltas.map(n => Math.round(n));
     if (!commit) return {e, wins: [], says: [], tilesChanged: false, drew: false, secondsChanged: false};
     const drawSeat = name === 'after_call' ? i : this.turn, held = this.players[drawSeat]?.hand.length ?? 0;
-    const tilesChanged = JSON.stringify(JSON.parse(original), ['players', 'hand', 'river', 'melds', 'tiles', 'wall']) !==
-      JSON.stringify(JSON.parse(data()), ['players', 'hand', 'river', 'melds', 'tiles', 'wall']);
+    // Scores, direction and time are copied back separately; everything else is the table.
+    const table = json => { const {players, wall} = JSON.parse(json); return JSON.stringify({wall, players: players.map(({score, ...rest}) => rest)}); };
+    const tilesChanged = table(original) !== table(data());
     this.players.forEach((p, s) => {
       const v = g.players[s];
       if (tilesChanged) {
@@ -415,6 +422,8 @@ export class Room {
   }
   isWinning(i, hand, tile = '', readOnly = false, method = 'ツモ') {
     const melds = this.players[i].melds || [];
+    // Every tsumo query sees the drawn tile, like the actual tsumo action.
+    if (!tile && method === 'ツモ') tile = hand.at(-1) ?? '';
     if (hand.length !== 14 - melds.length * 3 || hand.some(t => !TILES.includes(t))) return false;
     const allowed = winning(hand, 'default', 'none', melds);
     const out = this.runPrograms('win_check', i, {hand: [...hand], tile, method, allowed,

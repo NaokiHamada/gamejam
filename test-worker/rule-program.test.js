@@ -294,3 +294,41 @@ describe('生成ルールの登録', () => {
     }
   });
 });
+
+describe('レビュー指摘の回帰', () => {
+  it('副露の種類・放銃元だけの変更も反映する', () => {
+    const room = roomWith(`on('speech', (g) => { g.players[0].melds[0].from = 2; g.players[0].melds[0].type = 'kan'; });`);
+    room.players[0].melds = [{type: 'pon', tiles: ['5z', '5z', '5z'], from: 1}];
+    room.speech(room.players[0], '変更');
+    expect(room.players[0].melds[0]).toMatchObject({type: 'kan', from: 2});
+  });
+  it('ツモ可否の表示・NPC判定・実際のツモで同じあがり牌を渡す', () => {
+    const room = roomWith(`on('win_check', (g, e) => e.tile === '7z' || undefined);`);
+    room.players[0].hand = [...losing, '7z'];
+    expect(room.snapshot(room.players[0]).can_tsumo).toBe(true);
+    room.players[0].npc = true; room.npc_deadline = 0;
+    room.tick();
+    expect(room.result?.winner).toBe(0);
+  });
+  it('打牌前フックが打牌する牌を動かしたら打牌を取り消し、他の牌を失わない', () => {
+    const room = roomWith(`on('before_discard', (g, e) => { const h = g.players[e.actor].hand; g.wall.push(h.splice(h.indexOf(e.tile), 1)[0]); });`);
+    room.players[0].hand = [...losing, '7z'];
+    room.discard(room.players[0], '7z');
+    expect(room.players[0].hand).toEqual(losing);
+    expect(room.players[0].river).toEqual([]);
+    expect(room.turn).toBe(0);
+    expect(room.claim).toBe(null);
+    expect(room.wall[0]).toBe('7z');
+  });
+  it('鳴き前フックが牌を動かしたら鳴きを取り消し、河の別の牌を消さない', () => {
+    const room = roomWith(`on('before_call', (g, e) => { g.players[e.actor].hand.pop(); });`);
+    for (const p of room.players) { p.hand = [...losing]; p.river = []; }
+    room.players[1].hand = ['5z', '5z', ...losing.slice(2)];
+    room.players[0].river = ['1m', '5z']; room.claim = {tile: '5z', from: 0, passed: [], requests: [], deadline: Date.now() / 1000 + 8};
+    room.call(room.players[1], 'pon', ['5z', '5z']);
+    expect(room.players[1].melds).toEqual([]);
+    expect(room.players[0].river).toEqual(['1m', '5z']);
+    expect(room.claim).toBe(null);
+    expect(room.turn).toBe(1);
+  });
+});
