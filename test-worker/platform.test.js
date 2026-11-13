@@ -64,7 +64,7 @@ describe('WorkersとSQLite Durable Objects', () => {
       room.players[1].hand.splice(0, 2, '5z', '5z');
       room.players[2].hand = '1m 2m 3m 4m 5m 6m 2p 3p 4p 7s 8s 9s 5z'.split(' ');
       room.claim = {tile: '5z', from: 0, passed: [], requests: [], deadline: Date.now() / 1000 + 60};
-      room.programs = [{id: 'call', title: '鳴き加点', code: JSON.stringify([{on: 'after_call', when: true, do: [['award', 100]]}]), memory: [{}, {}, {}, {}]}];
+      room.programs = [{id: 'call', title: '鳴き加点', code: `on('after_call', (g, e) => g.award(e.actor, 100));`, memory: {}}];
     });
     expect((await action('call', {...clients[1], token: 'invalid'}, {type: 'pon', tiles: ['5z', '5z']})).status).toBe(403);
     const request = await action('call', clients[1], {type: 'pon', tiles: ['5z', '5z']});
@@ -136,7 +136,7 @@ describe('WorkersとSQLite Durable Objects', () => {
     await seed(clients[0].code, room => {
       room.rules.speech_keyword = 'ポテト'; room.rules.speech_effect = 'win';
       room.programs = [{id: 'existing', title: '発言ボーナス', explanation: '各員から1000点',
-        code: JSON.stringify([{on: 'speech', when: true, do: [['award', 1000]]}]), memory: [{}, {}, {}, {}], disabled: false}];
+        code: `on('speech', (g, e) => g.award(e.actor, 1000));`, memory: {}, disabled: false}];
     });
     vi.stubGlobal('fetch', () => Promise.resolve(Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({
       accepted: false, justification: 'not_needed', violation, severity: 2, title: 'チョンボ', explanation: 'ゲームを壊す要求です。',
@@ -177,7 +177,7 @@ describe('WorkersとSQLite Durable Objects', () => {
   });
   it('採用した発言から生成コードを即時発動し、SQLiteから復元する', async () => {
     const clients = await started();
-    const code = JSON.stringify([{on: 'speech', when: ['includes', ['get', 'text'], '祭り'], do: [['set', 'n', ['+', ['var', 'n'], 1]], ['award', 500]]}]);
+    const code = `on('speech', (g, e) => { if (!e.text.includes('祭り')) return; g.memory[e.actor] = (g.memory[e.actor] || 0) + 1; g.award(e.actor, 500); });`;
     let calls = 0;
     vi.stubGlobal('fetch', () => {
       calls++;
@@ -196,15 +196,14 @@ describe('WorkersとSQLite Durable Objects', () => {
     vi.unstubAllGlobals();
     await evictDurableObject(stubFor(clients[0].code));
     await runInDurableObject(stubFor(clients[0].code), instance => {
-      expect(instance.room.programs[0].memory[0].n).toBe(1);
-      expect(instance.room.programs[0].memory[1].n).toBe(1);
+      expect(instance.room.programs[0].memory).toEqual({0: 1, 1: 1});
     });
     expect((await state(clients[0])).state.programs[0].code).toBe(code);
   });
   it('親のツモ後に採用した追加ツモを同じターンに適用し、復元後も重複しない', async () => {
     const clients = await started(), host = clients[0];
     const before = (await state(host)).state;
-    const code = JSON.stringify([{on: 'after_draw', when: ['==', ['get', 'actor'], ['get', 'dealer']], do: [['draw_tiles', 1]]}]);
+    const code = `on('after_draw', (g, e) => { if (e.actor === g.dealer) g.draw(e.actor); });`;
     vi.stubGlobal('fetch', () => Promise.resolve(Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({
       accepted: true, justification: 'sufficient', violation: 'none', severity: 0, title: '親は2枚ツモ', explanation: '親は追加で1枚ツモれます。',
       rules: {...DEFAULT_RULES}, program: {mode: 'add', id: 'dealer-draw', code}})}]}]})));
@@ -244,13 +243,13 @@ describe('WorkersとSQLite Durable Objects', () => {
     const clients = await started();
     await runInDurableObject(stubFor(clients[0].code), async instance => {
       const room = instance.room;
-      room.programs = [{id: 'clock', title: '時計', code: JSON.stringify([{on: 'speech', when: true, do: [['turn_time', 45]]}]),
-        memory: [{}, {}, {}, {}], disabled: false}];
+      room.programs = [{id: 'clock', title: '時計', code: `on('speech', (g) => { g.turnSeconds = 60; });`,
+        memory: {}, disabled: false}];
       const job = {id: 'clock-job', started: Date.now() / 1000 - 10, before: {...room.rules}};
       room.pending = true; room.pending_job = job;
       room.speechEffects(room.players[0], '時計を戻す');
       instance.resume(job);
-      expect(room.deadline - Date.now() / 1000).toBeCloseTo(45, 0);
+      expect(room.deadline - Date.now() / 1000).toBeCloseTo(60, 0);
       await instance.save();
     });
   });
@@ -378,7 +377,7 @@ describe('WorkersとSQLite Durable Objects', () => {
   });
   it('中断されたAI判定をアラームで復旧し、遅れて届いた結果は適用しない', async () => {
     const clients = await started();
-    const job = {id: 'aborted', started: Date.now() / 1000 - 45, before: {...DEFAULT_RULES}};
+    const job = {id: 'aborted', started: Date.now() / 1000 - 70, before: {...DEFAULT_RULES}};
     await seed(clients[0].code, room => {room.pending = true;room.pending_job = job;});
     await evictDurableObject(stubFor(clients[0].code));
     await runDurableObjectAlarm(stubFor(clients[0].code));

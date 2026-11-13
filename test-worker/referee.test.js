@@ -7,7 +7,7 @@ it('Secrets Storeから実行時にキーを取得してAIへ渡す', async () =
   vi.stubGlobal('fetch', vi.fn(async (url, options) => {
     expect(url).toBe('https://api.openai.com/v1/responses');
     expect(options.headers.Authorization).toBe('Bearer fake-secret-from-store');
-    return Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({accepted: true, justification: 'sufficient', violation: 'none', severity: 0, program: {mode: 'add', id: 'joker', code: JSON.stringify([{on: 'win_check', when: true, do: [['allow_win', ['matches_hand', 'default', '5z']]]}])},
+    return Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({accepted: true, justification: 'sufficient', violation: 'none', severity: 0, program: {mode: 'add', id: 'joker', code: "on('win_check', (g, e) => e.allowed || isWinningHand(e.hand, {joker: '5z'}));"},
       title: '白がジョーカー', explanation: '白を好きな牌として使えます。', rules: {...DEFAULT_RULES}})}]}]});
   }));
   const result = await judge('白をジョーカーに', DEFAULT_RULES, {OPENAI_KEY_STORE: {get}});
@@ -26,10 +26,10 @@ it('入力・出力・トークン量を制限し、秘密やカウンタをAI�
     const payload = JSON.parse(init.body);
     expect(payload.model).toBe('gpt-6-luna');
     expect(payload.reasoning).toEqual({effort: 'medium'});
-    expect(payload.max_output_tokens).toBe(8192);
+    expect(payload.max_output_tokens).toBe(12000);
     expect(payload.store).toBe(false);
     expect(payload.input).not.toContain('private-counter');
-    return new Response('x'.repeat(65537));
+    return new Response('x'.repeat(262145));
   });
   vi.stubGlobal('fetch', request);
   await expect(judge('提案', DEFAULT_RULES, {OPENAI_API_KEY: 'fake'}, [{id: 'a', title: '公開', code: '[]', memory: {'private-counter': 1}}]))
@@ -47,7 +47,7 @@ it('明示した旧モデルにはLuna専用の推論設定を送らない', asy
     const payload = JSON.parse(init.body);
     expect(payload.model).toBe('gpt-4.1-mini');
     expect(payload).not.toHaveProperty('reasoning');
-    expect(payload.max_output_tokens).toBe(2400);
+    expect(payload.max_output_tokens).toBe(4000);
     return new Response('', {status: 500});
   }));
   await expect(judge('提案', DEFAULT_RULES, {OPENAI_API_KEY: 'fake', OPENAI_MODEL: 'gpt-4.1-mini'})).rejects.toThrow('AIサービス');

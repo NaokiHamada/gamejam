@@ -1,14 +1,12 @@
 import {describe, it, expect} from 'vitest';
 import {Room, DEFAULT_RULES, TILES, winning} from '../worker/game.js';
-import {compile, EVENTS, LIMITS} from '../worker/rule-program.js';
+import {compile, EVENTS} from '../worker/rule-program.js';
 
 const tiles = text => text.split(' ');
 const losing = tiles('1m 3m 5m 7m 9m 1p 3p 5p 7p 9p 1s 3s 5s');
-const hook = (on, actions, when = true) => ({on, when, do: actions});
-const get = field => ['get', field];
-function program(room, hooks) {
-  const code = JSON.stringify(hooks); compile(code);
-  room.programs = [{id: 'hooks', title: 'フック', code, memory: [{}, {}, {}, {}]}];
+function program(room, code) {
+  compile(code);
+  room.programs = [{id: 'hooks', title: 'フック', code, memory: {}}];
   return room.programs[0];
 }
 function lobby() {
@@ -25,16 +23,17 @@ function claimRoom(tile = '5z') {
   return room;
 }
 const memory = room => room.programs[0].memory;
+// Records a value per seat: mem(g, e, 'pre', value) stores memory.pre0 etc.
+const RECORD = `const rec = (g, e, key, value) => { g.memory[key + e.actor] = value; };\n`;
 
 describe('処理前後の生成フック', () => {
   it('直近2ステップのみに新コードを適用し、通常ツモと既存コードは繰り返さない', () => {
     const room = lobby(); room.start(room.players[0]);
-    const old = program(room, [hook('after_draw', [['award', 100]])]);
+    const old = program(room, `on('after_draw', (g, e) => g.award(e.actor, 100));`);
     room.changeTurn(1); room.draw();
     const wall = room.wall.length, hands = room.players.map(p => [...p.hand]);
     const scores = room.players.map(p => p.score);
-    const added = {id: 'new', title: '新ルール', memory: [{}, {}, {}, {}], code: JSON.stringify([
-      hook('after_draw', [['award', 200], ['draw_tiles', 1]])])};
+    const added = {id: 'new', title: '新ルール', memory: {}, code: `on('after_draw', (g, e) => { g.award(e.actor, 200); g.draw(e.actor); });`};
     room.programs.push(added);
     room.applyAdoptedProgram(added);
     expect(room.recent_events).toHaveLength(4);
@@ -50,82 +49,92 @@ describe('処理前後の生成フック', () => {
     const original = lobby(); original.start(original.players[0]);
     const data = structuredClone(original); delete data.recent_events;
     const room = Room.restore(data);
-    const added = program(room, [hook('after_draw', [['draw_tiles', 1]])]);
+    const added = program(room, `on('after_draw', (g, e) => g.draw(e.actor));`);
     const wall = room.wall.length;
     room.applyAdoptedProgram(added);
     expect(room.wall).toHaveLength(wall);
     expect(room.recent_events).toEqual([]);
   });
+  it('旧JSON言語の生成ルールは復元時に停止中として残す', () => {
+    const original = lobby(); original.start(original.players[0]);
+    original.programs = [{id: 'old', title: '旧', code: '[{"on":"draw","when":true,"do":[["award",100]]}]', memory: [{}, {}, {}, {}]}];
+    const room = Room.restore(structuredClone(original));
+    expect(room.programs[0]).toMatchObject({disabled: true, memory: {}});
+    const scores = room.players.map(p => p.score); room.draw();
+    expect(room.players.map(p => p.score)).toEqual(scores);
+  });
   it('開局・配牌は各席、最初のツモは親だけに処理前後の状態を渡す', () => {
     const room = lobby();
-    program(room, [
-      hook('before_round_start', [['set', 'start', get('wall')]]),
-      hook('before_deal', [['set', 'before', get('hand_count')], ['set', 'wall', get('wall')]]),
-      hook('after_deal', [['set', 'after', get('hand_count')]]),
-      hook('after_round_start', [['set', 'ready', get('wall')]]),
-      hook('before_draw', [['set', 'pre', get('hand_count')]]),
-      hook('after_draw', [['set', 'post', get('hand_count')]])]);
+    program(room, RECORD + `
+      on('before_round_start', (g, e) => rec(g, e, 'start', g.wall.length));
+      on('before_deal', (g, e) => { rec(g, e, 'before', g.players[e.actor].hand.length); rec(g, e, 'wall', g.wall.length); });
+      on('after_deal', (g, e) => rec(g, e, 'after', g.players[e.actor].hand.length));
+      on('after_round_start', (g, e) => rec(g, e, 'ready', g.wall.length));
+      on('before_draw', (g, e) => rec(g, e, 'pre', g.players[e.actor].hand.length));
+      on('after_draw', (g, e) => rec(g, e, 'post', g.players[e.actor].hand.length));`);
     room.start(room.players[0]);
-    expect(memory(room)[0]).toMatchObject({start: 136, before: 0, wall: 136, after: 13, ready: 84, pre: 13, post: 14});
-    expect(memory(room)[3]).toMatchObject({start: 136, before: 0, wall: 97, after: 13, ready: 84});
-    expect(memory(room)[1]).not.toHaveProperty('pre');
+    expect(memory(room)).toMatchObject({start0: 136, before0: 0, wall0: 136, after0: 13, ready0: 84, pre0: 13, post0: 14,
+      start3: 136, before3: 0, wall3: 97, after3: 13, ready3: 84});
+    expect(memory(room)).not.toHaveProperty('pre1');
     room.status = 'finished'; room.start(room.players[0]);
     expect(room.players.every(p => !p.melds.length)).toBe(true);
-    expect(memory(room)[0].before).toBe(0);
+    expect(memory(room).before0).toBe(0);
   });
-  it('打牌と手番交代の前後を観測し、従来のdraw/discardとも互換性を保つ', () => {
+  it('打牌と手番交代の前後を観測し、短縮名のdraw/discardも使える', () => {
     const room = lobby(); room.start(room.players[0]);
     room.players.forEach(p => { p.hand = [...losing]; }); room.players[0].hand.push('7z');
-    program(room, [hook('before_discard', [['set', 'pre', get('hand_count')]]),
-      hook('discard', [['set', 'post', get('hand_count')]]),
-      hook('before_turn', [['set', 'old', get('turn')]]), hook('after_turn', [['set', 'new', get('turn')]]),
-      hook('draw', [['set', 'drawn', get('hand_count')]])]);
+    program(room, RECORD + `
+      on('before_discard', (g, e) => rec(g, e, 'pre', g.players[e.actor].hand.length));
+      on('discard', (g, e) => { rec(g, e, 'post', g.players[e.actor].hand.length); rec(g, e, 'tile', e.tile); });
+      on('before_turn', (g, e) => rec(g, e, 'old', g.turn));
+      on('after_turn', (g, e) => rec(g, e, 'new', g.turn));
+      on('draw', (g, e) => rec(g, e, 'drawn', g.players[e.actor].hand.length));`);
     room.discard(room.players[0], '7z');
-    expect(memory(room)[0]).toMatchObject({pre: 14, post: 13});
-    expect(memory(room)[1]).toMatchObject({old: 0, new: 1, drawn: 14});
+    expect(memory(room)).toMatchObject({pre0: 14, post0: 13, tile0: '7z', old1: 0, new1: 1, drawn1: 14});
   });
   it('安全な発言の前後で合言葉の得点移動を挟み、採用判定待ちでは実行しない', () => {
     const room = lobby(); room.start(room.players[0]); room.rules.speech_keyword = '白';
-    program(room, [hook('before_speech', [['set', 'before', get('score')]]), hook('speech', [['set', 'after', get('score')]])]);
-    room.speech(room.players[0], '白', true); expect(memory(room)[0]).toEqual({});
+    program(room, `on('before_speech', (g, e) => { g.memory.before = g.players[e.actor].score; g.memory.text = e.text; });
+      on('speech', (g, e) => { g.memory.after = g.players[e.actor].score; });`);
+    room.speech(room.players[0], '白', true); expect(memory(room)).toEqual({});
     room.speechEffects(room.players[0], '白');
-    expect(memory(room)[0]).toEqual({before: 25000, after: 25900});
+    expect(memory(room)).toEqual({before: 25000, text: '白', after: 25900});
   });
-  it('点数計算の前後と旧補正を順に適用し、支払い前の点と放銃席を渡す', () => {
+  it('点数計算の前後を順に適用し、支払い前の点と放銃席を渡す', () => {
     const room = lobby(); room.start(room.players[0]);
-    program(room, [hook('before_score', [['set', 'base', get('points')], ['add_points', 1000]]),
-      hook('win_score', [['add_points', 500]]),
-      hook('after_score', [['set', 'calculated', get('points')], ['set', 'loser', get('loser')], ['add_points', ['*', get('points'), 1]]])]);
+    program(room, `on('before_score', (g, e) => { g.memory.base = e.points; return e.points + 1000; });
+      on('win_score', (g, e) => e.points + 500);
+      on('after_score', (g, e) => { g.memory.calculated = e.points; g.memory.loser = e.loser; return e.points * 2; });`);
     room.finish(0, 2, ['1z'], 'ロン');
-    expect(memory(room)[0]).toEqual({base: 6000, calculated: 7500, loser: 2});
+    expect(memory(room)).toEqual({base: 6000, calculated: 7500, loser: 2});
     expect(room.result.deltas).toEqual([15000, 0, -15000, 0]);
     expect(room.players.reduce((n, p) => n + p.score, 0)).toBe(100000);
   });
-  it('点数を各段階で制限し、計算失敗でそのコードの変数と補正を取り消す', () => {
+  it('点数を100点単位・上限内に丸め、計算失敗でそのコードの記録と補正を取り消す', () => {
     const room = lobby(); room.start(room.players[0]);
-    program(room, [hook('before_score', [['add_points', 24000]]), hook('after_score', [['add_points', 24000]])]);
-    room.rules.bonus_suit = 'z'; room.rules.bonus_points = 2000;
-    room.finish(0, 1, Array(14).fill('1z'), 'ロン'); expect(room.result.deltas[0]).toBe(60000);
+    program(room, `on('win_score', (g, e) => 96049);`);
+    room.finish(0, 1, Array(14).fill('1z'), 'ロン'); expect(room.result.deltas[0]).toBe(96000);
     room.status = 'playing';
-    program(room, [hook('before_score', [['set', 'n', 1], ['add_points', ['/', 100, 0]]])]);
+    program(room, `on('before_score', (g, e) => { g.memory.n = 1; g.players[0].score += 5000; return null.x; });`);
+    const scores = room.players.map(p => p.score);
     room.finish(0, 1, [], 'ロン');
-    expect(room.programs[0].disabled).toBe(true); expect(memory(room)[0]).toEqual({});
+    expect(room.programs[0].disabled).toBe(true); expect(memory(room)).toEqual({});
     expect(room.result.deltas[0]).toBe(6000);
+    expect(room.players[0].score).toBe(scores[0] + 6000);
   });
-  it('新イベントを検証し、処理前の即あがり・得点以外の補正・上限超過を拒否する', () => {
-    for (const event of EVENTS.filter(e => !['win_check', 'win_score'].includes(e))) {
-      expect(() => compile(JSON.stringify([hook(event, [['set', 'n', 1]])]))).not.toThrow();
-    }
-    for (const event of ['before_draw', 'before_call', 'after_call', 'before_score', 'after_score']) {
-      expect(() => compile(JSON.stringify([hook(event, [['win']])]))).toThrow();
-    }
-    expect(() => compile(JSON.stringify([hook('after_deal', [['add_points', 100]])]))).toThrow();
-    expect(() => compile(JSON.stringify(Array.from({length: LIMITS.hooks + 1}, () => hook('after_draw', [['set', 'n', 1]]))))).toThrow();
+  it('全イベントを登録でき、未対応のイベント名や登録なしのコードを拒否する', () => {
+    for (const event of [...EVENTS, 'draw', 'discard', 'speech']) expect(() => compile(`on('${event}', () => {});`)).not.toThrow();
+    expect(() => compile(`on('before_win', () => {});`)).toThrow('未対応');
+    expect(() => compile(`on('before_round_end', () => {});`)).toThrow('未対応');
+    expect(() => compile(`const x = 1;`)).toThrow('on()');
+    expect(() => compile(`on('draw', 1);`)).toThrow();
+    expect(() => compile(`on('draw', (g) => {`)).toThrow();
   });
   it('ツモ後の即あがりで打牌後の次手番へ進まない', () => {
     const room = claimRoom(); room.claim = null; room.drawn = true; room.players[0].hand.push('7z');
-    program(room, [hook('after_draw', [['win']])]);
+    program(room, `on('after_draw', (g, e) => g.win(e.actor));`);
     room.discard(room.players[0], '7z'); expect(room.result.winner).toBe(1); expect(room.turn).toBe(1);
+    expect(room.result.text).toContain('生成ルールあがり');
     room.advance(); expect(room.turn).toBe(1);
   });
 });
@@ -134,15 +143,15 @@ describe('チー・ポン・大明槓と鳴きフック', () => {
   it.each([['pon', 2, 11], ['kan', 3, 11]])('%sで牌を移し、カンだけ補充ツモする', (type, count, expected) => {
     const room = claimRoom(); room.players[1].hand = [...Array(count).fill('5z'), ...losing.slice(count)];
     const originalWall = room.wall.length;
-    program(room, [hook('before_call', [['set', 'before', get('hand_count')], ['set', 'source', get('source')]]),
-      hook('after_call', [['set', 'after', get('hand_count')], ['set', 'melds', get('meld_count')], ['award', 100]])]);
+    program(room, `on('before_call', (g, e) => { g.memory.before = g.players[e.actor].hand.length; g.memory.source = e.source; g.memory.type = e.callType; });
+      on('after_call', (g, e) => { g.memory.after = g.players[e.actor].hand.length; g.memory.melds = g.players[e.actor].melds.length; g.award(e.actor, 100); });`);
     room.action('call', room.players[1], {type, tiles: Array(count).fill('5z')});
     expect(room.turn).toBe(1); expect(room.claim).toBe(null);
     expect(room.players[1].hand).toHaveLength(expected);
     expect(room.players[1].melds[0]).toMatchObject({type, from: 0, tiles: Array(count + 1).fill('5z')});
     expect(room.players[0].river).toEqual([]);
     expect(room.wall.length).toBe(originalWall - Number(type === 'kan'));
-    expect(memory(room)[1]).toEqual({before: 13, source: 0, after: 13 - count, melds: 1});
+    expect(memory(room)).toEqual({before: 13, source: 0, type, after: 13 - count, melds: 1});
     expect(room.players[1].score).toBe(25300);
     expect(room.snapshot(room.players[2]).players[1].melds).toEqual(room.players[1].melds);
     expect(Room.restore(JSON.parse(JSON.stringify(room))).players[1].melds).toEqual(room.players[1].melds);
@@ -185,11 +194,11 @@ describe('チー・ポン・大明槓と鳴きフック', () => {
   it('ポンは申請順にかかわらずチーより優先し、確定時にだけフックを実行する', () => {
     const room = claimRoom('3m'); room.players[1].hand = [...losing]; room.players[1].hand[1] = '2m';
     room.players[2].hand = ['3m', '3m', ...losing.slice(2)];
-    program(room, [hook('after_call', [['set', 'n', 1]])]);
+    program(room, `on('after_call', (g, e) => { g.memory['n' + e.actor] = 1; });`);
     room.call(room.players[1], 'chi', ['1m', '2m']);
-    expect(room.claim).not.toBe(null); expect(memory(room)[1]).toEqual({});
+    expect(room.claim).not.toBe(null); expect(memory(room)).toEqual({});
     room.call(room.players[2], 'pon', ['3m', '3m']);
-    expect(room.turn).toBe(2); expect(memory(room)[2].n).toBe(1); expect(memory(room)[1]).toEqual({});
+    expect(room.turn).toBe(2); expect(memory(room)).toEqual({n2: 1});
   });
   it('ロンを鳴きより優先し、見送り・締切で鳴きを確定する', () => {
     const room = claimRoom('5z'); room.players[1].hand = ['5z', '5z', ...losing.slice(2)];
@@ -209,13 +218,13 @@ describe('チー・ポン・大明槓と鳴きフック', () => {
   it('鳴き不可・AI待機・重複申請を拒否し、失敗時はフックも動かない', () => {
     const room = claimRoom(); room.players[1].hand = ['5z', '5z', ...losing.slice(2)];
     room.players[2].hand = ['5z', '5z', ...losing.slice(2)];
-    program(room, [hook('before_call', [['set', 'n', 1]])]);
+    program(room, `on('before_call', (g) => { g.memory.n = 1; });`);
     const before = JSON.stringify(room); expect(() => room.call(room.players[1], 'pon', ['5z', '7z'])).toThrow();
     expect(JSON.stringify(room)).toBe(before);
     room.pending = true; expect(() => room.call(room.players[1], 'pon', ['5z', '5z'])).toThrow(); room.pending = false;
     room.call(room.players[1], 'pon', ['5z', '5z']);
     expect(() => room.call(room.players[1], 'pon', ['5z', '5z'])).toThrow();
-    expect(memory(room)[1]).toEqual({});
+    expect(memory(room)).toEqual({});
     room.wall = []; expect(room.callOptions(2).some(o => o.type === 'kan')).toBe(false);
   });
   it('副露を固定面子として判定し、七対子に組み替えず、鳴き直後のツモあがりを拒否する', () => {
@@ -233,7 +242,7 @@ describe('チー・ポン・大明槓と鳴きフック', () => {
   it('副露後の独自あがり判定の照会で状態を変えず、全牌のボーナスを計算する', () => {
     const room = claimRoom(); room.claim = null; room.turn = 1; room.drawn = true;
     room.players[1].melds = [{type: 'kan', tiles: Array(4).fill('5z'), from: 0}]; room.players[1].hand = losing.slice(0, 11);
-    program(room, [hook('win_check', [['win']], ['==', get('meld_count'), 1])]);
+    program(room, `on('win_check', (g, e) => g.players[e.actor].melds.length === 1 || undefined);`);
     const before = JSON.stringify(room); expect(room.snapshot(room.players[1]).can_tsumo).toBe(true); expect(JSON.stringify(room)).toBe(before);
     room.rules.bonus_suit = 'z'; room.win(room.players[1], 'tsumo');
     expect(room.result.hand).toHaveLength(15); expect(room.result.deltas[1]).toBe(8100);

@@ -3,7 +3,8 @@ import {Room, GameError, require, randomInt, now} from './game.js';
 import {judge, penalty, updatePrograms, VIOLATIONS, DEFAULT_MODEL} from './referee.js';
 
 const ROOM_TTL = 6 * 3600;
-const AI_TIMEOUT = 40;
+// Must exceed the referee request timeout (55s) so a slow answer is still applied.
+const AI_TIMEOUT = 65;
 const JUDGE_QUEUE_LIMIT = 6, JUDGE_QUEUE_PER_PLAYER = 2;
 const CODE = /^[A-HJ-NP-Z2-9]{5}$/;
 const SECURITY = {

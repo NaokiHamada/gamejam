@@ -50,7 +50,7 @@ describe('NPC', () => {
   });
   it('変更された生成条件でツモし、次局へNPCと持ち点を引き継ぐ', () => {
     const room = solo(); room.turn = 1; room.npc_deadline = 0;
-    room.programs = [{id: 'pair', code: JSON.stringify([{on: 'win_check', when: true, do: [['win']]}]), memory: [{}, {}, {}, {}]}];
+    room.programs = [{id: 'pair', code: `on('win_check', () => true);`, memory: {}}];
     room.players[1].hand = [...losing, '1m'];
     room.tick(); expect(room.result.winner).toBe(1);
     const score = room.players[1].score;
@@ -60,7 +60,7 @@ describe('NPC', () => {
   it('生成コードの条件でもツモできる', () => {
     const room = solo(); room.turn = 1; room.npc_deadline = 0;
     room.players[1].hand = [...losing, '7z'];
-    room.programs = [{id: 'any', title: '条件', code: JSON.stringify([{on: 'win_check', when: true, do: [['win']]}]), memory: [{}, {}, {}, {}]}];
+    room.programs = [{id: 'any', title: '条件', code: `on('win_check', () => true);`, memory: {}}];
     room.tick(); expect(room.result.winner).toBe(1);
   });
   it('人間のロン機会を表示したうえでNPCもロンし、見送り済みは対象外', () => {

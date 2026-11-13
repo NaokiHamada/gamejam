@@ -1,5 +1,5 @@
-// A bounded, local heuristic. Only this player's hand and public bonus settings are used.
-export function chooseDiscard(hand, rules) {
+// A bounded, local heuristic. Only this player's hand, public bonus settings and discard rules are used.
+export function chooseDiscard(hand, rules, allowed = () => true) {
   const value = tiles => {
     const counts = new Map();
     for (const tile of tiles) counts.set(tile, (counts.get(tile) || 0) + 1);
@@ -17,6 +17,7 @@ export function chooseDiscard(hand, rules) {
   };
   let best = -Infinity, discard = hand.at(-1);
   for (let i = hand.length - 1; i >= 0; i--) {
+    if (!allowed(hand[i])) continue;
     const score = value(hand.filter((_, j) => i !== j));
     if (score > best) { best = score; discard = hand[i]; }
   }
