@@ -294,7 +294,7 @@ export class Room {
         require(p === this.players[0] && this.status !== 'playing' && !this.pending, '部屋主が局の合間にリセットできます。');
         this.rules = {...DEFAULT_RULES}; this.programs = []; this.direction = 1; this.turn_seconds = 45;
         this.history.push({title: '初期ルールに戻しました', explanation: '次の局から初期ルールで対戦します。', changes: {}, by: p.name});
-        this.history = this.history.slice(-30); this.event('rule', '初期ルールに戻しました。'); break;
+        this.history = this.history.slice(-30); this.event('rule', '…卓を洗い直しました。次の局からは、まっさらな初期ルールでお楽しみください。'); break;
       case 'leave':
         require(this.status === 'lobby', '対局開始後は席を保持します。同じタブで復帰できます。');
         this.players.splice(this.players.indexOf(p), 1);

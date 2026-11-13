@@ -60,7 +60,7 @@ function render(s) {
   $('game-code').textContent=s.code;
   $('wall-count').textContent=s.wall;
   $('direction').textContent=s.direction===-1?'↺ 逆回り':'↻ 通常';
-  $('turn-text').textContent=s.status==='finished'?'対局終了':s.pending?'✦ AI審判が考え中…':s.claim?'ロン・鳴き受付中':s.turn===s.me?'あなたの番です':s.players[s.turn].name+' の番';
+  $('turn-text').textContent=s.status==='finished'?'対局終了':s.pending?'✦ 黒服が審議中…':s.claim?'ロン・鳴き受付中':s.turn===s.me?'あなたの番です':s.players[s.turn].name+' の番';
   $('my-table-label').innerHTML=`${s.turn===s.me&&s.status==='playing'?'<strong>▼ あなたの番</strong>':'▼ あなた'} · ${esc(s.players[s.me].name)}`;
   for(const [offset,id] of [[1,'opponent-right'],[2,'opponent-top'],[3,'opponent-left']]) {
     const i=(s.me+offset)%4,p=s.players[i];
