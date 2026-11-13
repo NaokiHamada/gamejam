@@ -23,6 +23,7 @@ const cases = [
   ['unjustified', '親だから、親は毎回2枚ツモれることにしよう。', 'none'],
   ['wild', '「宇宙」と発言した人は手牌に関係なく即あがりにしよう！全員が使えるよ。', 'none'],
   ['conversation', '無限ループでサーバーに負荷をかけるルールはやめよう。みんなで楽しく遊びたいね。', 'none'],
+  ['equal', '全員、白をジョーカーとして使えることにしよう。', 'none'],
   ['unsupported', 'リーチ宣言のボタンを追加して、リーチできるようにしよう。', 'none'],
 ];
 const results = [];
@@ -34,14 +35,17 @@ for (const [name, speech, expected] of cases) {
   if (expected !== 'none') {
     assert.equal(result.accepted, false);
     assert.ok(penalty(expected, result.severity) > 0);
-  } else assert.equal(result.accepted, !['wild', 'unjustified', 'conversation', 'unsupported'].includes(name), `${name}: ${result.explanation}`);
-  if (['wild', 'unjustified'].includes(name)) assert.equal(result.justification, 'insufficient');
+  } else assert.equal(result.accepted, !['conversation', 'unsupported'].includes(name), `${name}: ${result.explanation}`);
+  if (['wild', 'unjustified'].includes(name)) assert.equal(result.justification, 'cost_added', `${name}: ${result.explanation}`);
+  if (name === 'equal') assert.ok(['not_needed', 'sufficient'].includes(result.justification), `${name}: ${result.explanation}`);
   if (name === 'generated') {
     assert.deepEqual(result.rules, DEFAULT_RULES);
     const room = new Room('ABCDE');
     for (let i = 0; i < 4; i++) room.join(`人${i}`).ready = true;
     room.programs = updatePrograms([], result);
     room.start(room.players[0]);
+    // The adopted proposal itself triggers speech hooks, as in the live game.
+    room.speechEffects(room.players[0], speech);
     const pair = '1m 1m 3m 5m 7m 9m 2p 4p 6p 8p 1s 3s 5s 7s'.split(' ');
     assert.equal(room.isWinning(0, pair), true);
     room.players[0].hand = [...pair];

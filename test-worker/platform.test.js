@@ -157,14 +157,14 @@ describe('WorkersとSQLite Durable Objects', () => {
     expect(restored.players).toEqual(view.players);
     expect(restored.messages.filter(m => m.kind === 'chonbo')).toHaveLength(1);
   });
-  it('正当化が不十分な提案は減点もルール変更もなく理由を返して再開する', async () => {
+  it('面白さが足りない提案は減点もルール変更もなく理由を返して再開する', async () => {
     const clients = await started(), host = clients[0];
     const before = (await state(host)).state;
     vi.stubGlobal('fetch', () => Promise.resolve(Response.json({output: [{content: [{type: 'output_text', text: JSON.stringify({
-      accepted: false, justification: 'insufficient', violation: 'none', severity: 0,
-      title: '追加ツモは保留', explanation: '親というだけでは追加ツモの根拠が足りません。代償や条件を添えて再提案してください。',
+      accepted: false, justification: 'not_fun', violation: 'none', severity: 0,
+      title: '変化なし', explanation: '今のルールとほぼ同じです。もっと駆け引きが生まれる形で再提案してください。',
       rules: {...DEFAULT_RULES}, program: {mode: 'none', id: '', code: ''}})}]}]})));
-    await action('speech', host, {text: '私は親だから2つツモれる'});
+    await action('speech', host, {text: '今のルールのままにしよう'});
     const after = await settled(host);
     expect(after.rules).toEqual(before.rules);
     expect(after.programs).toEqual(before.programs);
