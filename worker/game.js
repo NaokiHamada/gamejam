@@ -377,7 +377,9 @@ export class Room {
           if (['before_score', 'win_score', 'after_score'].includes(name) && typeof value === 'number') e.points = value;
           if (name === 'payment' && Array.isArray(value)) e.deltas = value;
         });
-        if (name === 'payment' && !(Array.isArray(e.deltas) && e.deltas.length === 4 && e.deltas.every(n => typeof n === 'number' && Number.isFinite(n)))) {
+        // Index every seat: every() would skip holes such as new Array(4).
+        if (name === 'payment' && !(Array.isArray(e.deltas) && e.deltas.length === 4 &&
+          [0, 1, 2, 3].every(k => typeof e.deltas[k] === 'number' && Number.isFinite(e.deltas[k])))) {
           throw new Error('支払いの配列が不正です。');
         }
         validateTable(g, reserve);
@@ -483,6 +485,8 @@ export class Room {
     if (this.status !== 'playing') return;
     const i = this.players.indexOf(p);
     this.applyPrograms('before_speech', i, {text});
+    // A before_speech hook may already have ended the round (g.win).
+    if (this.status !== 'playing') return;
     if (this.rules.speech_keyword && text.includes(this.rules.speech_keyword)) {
       if (this.rules.speech_effect === 'win') { this.finish(i, null, p.hand, '合言葉あがり'); return; }
       const points = this.rules.speech_points;

@@ -361,3 +361,20 @@ describe('レビュー指摘の回帰（2回目）', () => {
     expect(room.players.map(p => p.hand.length)).toEqual([13, 14, 13, 13]);
   });
 });
+
+describe('レビュー指摘の回帰（3回目）', () => {
+  it('発言前フックの即あがりで合言葉あがりを重ねない', () => {
+    const room = roomWith(`on('before_speech', (g, e) => g.win(e.actor, '先取り'));`);
+    room.rules.speech_keyword = '白'; room.rules.speech_effect = 'win';
+    room.speech(room.players[0], '白');
+    expect(room.result.text).toContain('先取り');
+    expect(room.players.map(p => p.score)).toEqual([31000, 23000, 23000, 23000]);
+  });
+  it('空きのある支払い配列は取り消して通常の支払いにする', () => {
+    const room = roomWith(`on('payment', (g, e) => { const d = new Array(4); d[e.winner] = 9000; d[e.loser] = -9000; return d; });`);
+    room.finish(0, 1, ['1z'], 'ロン');
+    expect(room.result.deltas).toEqual([6000, -6000, 0, 0]);
+    expect(room.players.every(p => Number.isFinite(p.score))).toBe(true);
+    expect(room.programs[0].disabled).toBe(true);
+  });
+});
