@@ -94,7 +94,9 @@ export function validateTable(g, reserve = 0) {
     throw new Error('卓の形式が不正です。');
   }
   const pools = [g.wall, ...g.players.flatMap(p => [p.hand, p.river, ...(Array.isArray(p.melds) ? p.melds.map(m => m?.tiles) : [null])])];
-  if (!pools.every(pool => Array.isArray(pool) && pool.length <= LIMITS.pool && pool.every(t => TILES.includes(t))) ||
+  // Check every index: every() skips holes such as those left by `delete hand[0]`.
+  const valid = pool => Array.isArray(pool) && pool.length <= LIMITS.pool && Array.from(pool).every(t => TILES.includes(t));
+  if (!pools.every(valid) ||
     pools.reduce((n, pool) => n + pool.length, 0) > LIMITS.tiles) throw new Error('牌の内容または枚数が不正です。');
   if (g.wall.length < reserve) throw new Error('後続席の配牌に必要な山牌がありません。');
   for (const p of g.players) {

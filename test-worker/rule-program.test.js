@@ -75,6 +75,8 @@ describe('JavaScriptの生成ルール', () => {
     ['不正な席', `g.pay(0, 4, 100)`],
     ['大きすぎる記録', `g.memory.big = 'x'.repeat(9000)`],
     ['卓の差し替え', `g.players = null`],
+    ['山の空き', `g.wall.length += 1`],
+    ['手牌の空き', `delete g.players[0].hand[0]`],
     ['山の差し替え', `g.wall = 'none'`],
   ])('%sは変更全体を取り消して停止する', (_, body) => {
     const room = roomWith(`on('speech', (g, e) => { g.award(e.actor, 100); ${body}; });`);
